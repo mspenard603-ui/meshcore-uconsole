@@ -23,6 +23,10 @@ def test_poll_events_drains_buffer_and_history_remains() -> None:
 
     polled_first = client.poll_events(limit=50)
     assert polled_first
+    # The mock queues its demo packets at start-up, more than one poll's worth.
+    for _ in range(20):
+        if not client.poll_events(limit=50):
+            break
 
     polled_second = client.poll_events(limit=50)
     assert polled_second == []

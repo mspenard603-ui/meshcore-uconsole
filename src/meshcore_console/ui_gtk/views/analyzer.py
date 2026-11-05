@@ -4,6 +4,7 @@ import hashlib
 import logging
 import os
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -47,6 +48,7 @@ class PacketRecord:
     header_byte: int | None = None
     channel_name: str = ""
     transport_codes: list[int] | None = None
+    sender_pubkey: str = ""  # adverts: the sender's full key
 
 
 class AnalyzerView(Gtk.Box):
@@ -56,15 +58,33 @@ class AnalyzerView(Gtk.Box):
     COL_NODE_CHARS = 14  # display name cap
     COL_ROUTE_CHARS = 3  # "D" or "2R"
     COL_SIGNAL_CHARS = 14  # -112 / -9.00 + padding
+    COL_LINK_CHARS = 6  # "heard?"
 
-    def __init__(self, service: MeshcoreService, event_store: UiEventStore, layout: Layout) -> None:
+    def __init__(
+        self,
+        service: MeshcoreService,
+        event_store: UiEventStore,
+        layout: Layout,
+        *,
+        record_filter: Callable[[PacketRecord], bool] | None = None,
+        link_label: Callable[[PacketRecord], str | None] | None = None,
+        history: int = 400,
+        wrap_filters: bool = False,
+    ) -> None:
+        """*record_filter* limits the stream to matching packets (Repeaters > Packets
+        passes one per repeater); *link_label* adds a LINK column with its text.
+        *wrap_filters* lets the filter buttons wrap onto a second line, for a
+        narrow embedding: one row of them needs ~880 px."""
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self._service = service
         self._event_store = event_store
         self._layout = layout
         self._geom_debug = os.environ.get("MESHCORE_UI_GEOM_DEBUG", "0") == "1"
         self._cursor = 0
-        self._packets: deque[PacketRecord] = deque(maxlen=400)
+        self._history = history
+        self._record_filter = record_filter
+        self._link_label = link_label
+        self._packets: deque[PacketRecord] = deque(maxlen=history)
         self._selected_packet: PacketRecord | None = None
         self._paused = False
         self._dedupe = False
@@ -76,13 +96,25 @@ class AnalyzerView(Gtk.Box):
         self.append(toolbar)
 
         self._filter_buttons: dict[AnalyzerFilter, Gtk.ToggleButton] = {}
+        filters: Gtk.Widget = toolbar
+        if wrap_filters:
+            toolbar.add_css_class("analyzer-toolbar-compact")
+            flow = Gtk.FlowBox()
+            flow.set_selection_mode(Gtk.SelectionMode.NONE)
+            flow.set_max_children_per_line(len(AnalyzerFilter) + 1)
+            flow.set_column_spacing(8)
+            flow.set_row_spacing(6)
+            flow.set_hexpand(True)
+            flow.set_valign(Gtk.Align.CENTER)
+            toolbar.append(flow)
+            filters = flow
         for filter_type in AnalyzerFilter:
             button = Gtk.ToggleButton.new_with_label(filter_type.value)
             button.add_css_class("analyzer-filter")
             button.add_css_class(f"filter-{self._type_class(filter_type.value)}")
             button.connect("clicked", self._on_filter_clicked, filter_type)
             self._filter_buttons[filter_type] = button
-            toolbar.append(button)
+            filters.append(button)
         self._filter_buttons[AnalyzerFilter.ALL].set_active(True)
 
         # Dedupe toggle
@@ -90,12 +122,13 @@ class AnalyzerView(Gtk.Box):
         self._dedupe_btn.add_css_class("analyzer-filter")
         self._dedupe_btn.set_tooltip_text("Hide duplicate packets (same hash, different hops)")
         self._dedupe_btn.connect("toggled", self._on_dedupe_toggled)
-        toolbar.append(self._dedupe_btn)
+        filters.append(self._dedupe_btn)
 
         # Spacer to push play/pause to the right
-        spacer = Gtk.Box()
-        spacer.set_hexpand(True)
-        toolbar.append(spacer)
+        if not wrap_filters:  # the flow box already takes the free width
+            spacer = Gtk.Box()
+            spacer.set_hexpand(True)
+            toolbar.append(spacer)
 
         # Play/pause toggle button with icon
         self._pause = Gtk.ToggleButton()
@@ -126,6 +159,8 @@ class AnalyzerView(Gtk.Box):
         header.append(self._header_label("TYPE", self.COL_TYPE_CHARS))
         header.append(self._header_label("NODE", self.COL_NODE_CHARS))
         header.append(self._header_label("RT", self.COL_ROUTE_CHARS))
+        if self._link_label is not None:
+            header.append(self._header_label("LINK", self.COL_LINK_CHARS))
         # Content header expands to fill remaining space
         content_header = self._header_label("CONTENT", -1)
         content_header.set_hexpand(True)
@@ -178,7 +213,7 @@ class AnalyzerView(Gtk.Box):
     def _load_stored_packets(self) -> None:
         """Load packets from persistent storage on startup."""
         try:
-            stored = self._service.list_stored_packets(limit=400)
+            stored = self._service.list_stored_packets(limit=self._history)
             # stored is chronological [oldest...newest], appendleft reverses to newest-first
             for packet_event in stored:
                 record = self._event_to_record(packet_event)
@@ -282,15 +317,16 @@ class AnalyzerView(Gtk.Box):
                 line = row.get_child()
                 if line is None:
                     break
-                # Children: time, type, node, route, content, signal
+                # Children: time, type, node, route, [link], content, signal
                 children = []
                 child = line.get_first_child()
                 while child is not None:
                     children.append(child)
                     child = child.get_next_sibling()
-                if len(children) >= 5:
+                content_idx = 5 if self._link_label is not None else 4
+                if len(children) > content_idx:
                     children[2].set_label(record.node)  # node label
-                    children[4].set_label(record.content)  # content label
+                    children[content_idx].set_label(record.content)  # content label
                 break
 
     @staticmethod
@@ -454,6 +490,7 @@ class AnalyzerView(Gtk.Box):
             header_byte=header_byte,
             channel_name=channel_name,
             transport_codes=transport_codes,
+            sender_pubkey=str(data.get("sender_pubkey") or ""),
         )
 
     @staticmethod
@@ -483,6 +520,18 @@ class AnalyzerView(Gtk.Box):
         now = GLib.DateTime.new_now_local()
         return now.format("%H:%M:%S.%f")[:11], now.format("%Y-%m-%d")
 
+    def set_record_filter(
+        self,
+        record_filter: Callable[[PacketRecord], bool] | None,
+        link_label: Callable[[PacketRecord], str | None] | None = None,
+    ) -> None:
+        """Show only packets matching *record_filter* (e.g. another repeater's)."""
+        self._record_filter = record_filter
+        if link_label is not None:
+            self._link_label = link_label
+        self._selected_packet = None
+        self._refresh_all()
+
     def _filtered_packets(self) -> list[PacketRecord]:
         if self._active_filter == AnalyzerFilter.ALL:
             packets = list(self._packets)
@@ -494,6 +543,8 @@ class AnalyzerView(Gtk.Box):
                 ]
             else:
                 packets = [p for p in self._packets if filter_val in p.packet_type]
+        if self._record_filter is not None:
+            packets = [p for p in packets if self._record_filter(p)]
         if self._dedupe:
             seen: set[str] = set()
             deduped: list[PacketRecord] = []
@@ -508,6 +559,8 @@ class AnalyzerView(Gtk.Box):
 
     def _matches_filter(self, record: PacketRecord) -> bool:
         """Check if a record matches the current active filter."""
+        if self._record_filter is not None and not self._record_filter(record):
+            return False
         if self._active_filter == AnalyzerFilter.ALL:
             return True
         filter_val = self._active_filter.value
@@ -633,6 +686,22 @@ class AnalyzerView(Gtk.Box):
         line.append(route_label)
 
         row.add_css_class("route-direct" if is_direct else "route-relayed")
+
+        if self._link_label is not None:
+            link = self._link_label(packet) or ""
+            link_label = Gtk.Label(label=link)
+            link_label.add_css_class("packet-link")
+            link_label.add_css_class(f"packet-link-{link.rstrip('?')}" if link else "panel-muted")
+            link_label.set_xalign(0)
+            link_label.set_width_chars(self.COL_LINK_CHARS)
+            link_label.set_max_width_chars(self.COL_LINK_CHARS)
+            link_label.set_single_line_mode(True)
+            if link.endswith("?"):
+                link_label.set_tooltip_text(
+                    "This short hash is shared with another known node: "
+                    "the packet may not involve this repeater"
+                )
+            line.append(link_label)
 
         content_label = Gtk.Label(label=packet.content)
         content_label.add_css_class("panel-muted")

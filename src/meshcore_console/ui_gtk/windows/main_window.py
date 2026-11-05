@@ -153,8 +153,8 @@ class MainWindow(Adw.ApplicationWindow):
         self._nav_buttons: dict[str, Gtk.ToggleButton] = {}
         for label, page_name in [
             ("Analyzer", "analyzer"),  # [rooms patch] Peers split into Contacts / Rooms / Repeaters
-            ("Channels", "messages"),
             ("Contacts", "contacts"),
+            ("Channels", "messages"),
             ("Rooms", "rooms"),
             ("Repeaters", "peers"),
             ("Map", "map"),  # [admin-fold patch] Admin is a tab inside Repeaters
@@ -862,8 +862,8 @@ class MainWindow(Adw.ApplicationWindow):
 
         mapping = {
             Gdk.KEY_1: "analyzer",  # [rooms patch] same order as the tabs
-            Gdk.KEY_2: "messages",
-            Gdk.KEY_3: "contacts",
+            Gdk.KEY_2: "contacts",
+            Gdk.KEY_3: "messages",
             Gdk.KEY_4: "rooms",
             Gdk.KEY_5: "peers",
             Gdk.KEY_6: "map",

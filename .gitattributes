@@ -1,4 +1,7 @@
-docs/peers.png filter=lfs diff=lfs merge=lfs -text
 docs/analyzer.png filter=lfs diff=lfs merge=lfs -text
 docs/channels.png filter=lfs diff=lfs merge=lfs -text
 docs/map.png filter=lfs diff=lfs merge=lfs -text
+docs/contacts.png filter=lfs diff=lfs merge=lfs -text
+docs/rooms.png filter=lfs diff=lfs merge=lfs -text
+docs/repeater-graph.png filter=lfs diff=lfs merge=lfs -text
+docs/repeater-packets.png filter=lfs diff=lfs merge=lfs -text

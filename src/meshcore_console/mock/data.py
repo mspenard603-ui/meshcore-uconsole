@@ -72,46 +72,57 @@ def mock_public_key(peer_id: str) -> str:
     return hashlib.sha256(peer_id.encode()).hexdigest()
 
 
-# Mock repeaters: (name, peer_id, lat, lon, signal %, favourite). Ten around the
-# Bay, most of them favourites, so the Map's favourite links have something to show.
+# Mock repeaters: (name, peer_id, lat, lon, signal %, favourite). Ten hill and
+# shoreline sites spread around the Bay, so the Map's favourite links form a
+# mesh of triangles across the water rather than a chain.
 MOCK_REPEATERS: list[tuple[str, str, float, float, int, bool]] = [
-    ("\U0001f4e1 Relay A", "relay-001", 37.7749, -122.4194, 78, True),  # SF downtown
-    ("\U0001f4e1 Backhaul B", "relay-002", 37.8044, -122.2712, 61, True),  # Oakland
-    ("\U0001f4e1 Hilltop C", "relay-003", 37.7575, -122.4376, 44, False),  # Twin Peaks
+    ("\U0001f4e1 Relay A", "relay-001", 37.7946, -122.3999, 78, True),  # SF Financial District
+    ("\U0001f4e1 Backhaul B", "relay-002", 37.8130, -122.1900, 61, True),  # Oakland hills
+    ("\U0001f4e1 Hilltop C", "relay-003", 37.9235, -122.5965, 44, False),  # Mt Tamalpais
     ("\U0001f4e1 Sutro D", "relay-004", 37.7552, -122.4528, 70, True),  # Sutro Tower
-    ("\U0001f4e1 Bay Bridge E", "relay-005", 37.7983, -122.3778, 66, True),  # Yerba Buena
+    ("\U0001f4e1 Bay Bridge E", "relay-005", 37.8235, -122.3706, 66, True),  # Treasure Island
     ("\U0001f4e1 Berkeley Hills F", "relay-006", 37.8810, -122.2440, 52, True),  # Grizzly Peak
-    ("\U0001f4e1 Davidson G", "relay-007", 37.7383, -122.4535, 38, False),  # Mt Davidson
+    ("\U0001f4e1 Davidson G", "relay-007", 37.6650, -122.0800, 38, False),  # Hayward hills
     ("\U0001f4e1 San Bruno H", "relay-008", 37.6879, -122.4330, 47, True),  # San Bruno Mtn
-    ("\U0001f4e1 Richmond I", "relay-009", 37.9358, -122.3478, 35, True),  # Richmond
+    ("\U0001f4e1 Richmond I", "relay-009", 37.9250, -122.3850, 35, True),  # Point Richmond
     ("\U0001f4e1 Alameda J", "relay-010", 37.7652, -122.2416, 58, True),  # Alameda
 ]
 
 # Who hears whom (zero-hop adverts): (hearer, heard, SNR dB, hours since heard).
-# Mutual pairs of favourites are linked on the Map; the rest test the edge cases:
-#   H hears A but A doesn't list H     -> one way, not drawn
-#   F and I last heard each other 5 d ago -> too old, not drawn
-#   J (favourite) has no table yet      -> listed as "no neighbour list"
-#   C and G are not favourites           -> never drawn
+# Mutual pairs of favourites are linked on the Map, eight links in triangles:
+#   A-D-H (west), A-E-I (north bay), E-B-F (east bay)
+# and the edge cases, which are not drawn:
+#   H hears A but A doesn't list H        -> one way
+#   F and I last heard each other 5 d ago  -> too old
+#   J (favourite) has no table yet          -> listed as "no neighbour list"
+#   C and G are not favourites              -> never drawn
 MOCK_NEIGHBOURS: list[tuple[str, str, float, float]] = [
-    ("relay-001", "relay-005", 7.5, 0.2),
-    ("relay-005", "relay-001", 6.25, 0.4),
-    ("relay-005", "relay-002", 4.0, 0.3),
-    ("relay-002", "relay-005", 3.25, 1.0),
-    ("relay-001", "relay-004", 2.5, 0.5),
-    ("relay-004", "relay-001", 1.75, 0.6),
-    ("relay-004", "relay-008", -5.0, 2.0),  # weak
+    ("relay-001", "relay-004", 6.5, 0.3),  # A-D
+    ("relay-004", "relay-001", 5.75, 0.5),
+    ("relay-001", "relay-005", 9.25, 0.2),  # A-E
+    ("relay-005", "relay-001", 8.5, 0.2),
+    ("relay-001", "relay-009", 1.5, 1.2),  # A-I, across the water
+    ("relay-009", "relay-001", 0.25, 1.0),
+    ("relay-004", "relay-008", -5.0, 2.0),  # D-H, weak
     ("relay-008", "relay-004", -6.25, 1.5),
-    ("relay-002", "relay-006", -8.5, 0.8),  # below the SF7 decode limit one way
+    ("relay-005", "relay-009", 3.0, 0.6),  # E-I
+    ("relay-009", "relay-005", 2.25, 0.8),
+    ("relay-005", "relay-002", 4.0, 0.3),  # E-B
+    ("relay-002", "relay-005", 3.25, 1.0),
+    ("relay-005", "relay-006", 5.5, 0.4),  # E-F
+    ("relay-006", "relay-005", 4.75, 0.4),
+    ("relay-002", "relay-006", -8.5, 0.8),  # B-F, below the SF7 decode limit one way
     ("relay-006", "relay-002", -3.0, 0.9),
-    ("relay-008", "relay-001", -2.0, 3.0),  # one way
-    ("relay-006", "relay-009", 1.0, 120.0),  # stale
+    ("relay-008", "relay-001", -2.0, 3.0),  # H hears A: one way
+    ("relay-006", "relay-009", 1.0, 120.0),  # F-I: stale
     ("relay-009", "relay-006", 0.5, 121.0),
     ("relay-002", "relay-010", 9.0, 0.1),  # J has no table
-    ("relay-001", "relay-003", 8.0, 0.2),  # C, G: not favourites
-    ("relay-003", "relay-001", 7.0, 0.3),
-    ("relay-004", "relay-007", 5.5, 0.4),
-    ("relay-007", "relay-004", 5.0, 0.4),
+    ("relay-001", "relay-003", 2.0, 0.2),  # C, G: not favourites
+    ("relay-003", "relay-001", 1.25, 0.3),
+    ("relay-003", "relay-009", 4.5, 0.5),
+    ("relay-009", "relay-003", 3.75, 0.5),
+    ("relay-002", "relay-007", 2.5, 0.4),
+    ("relay-007", "relay-002", 2.0, 0.4),
 ]
 MOCK_NO_TABLE = {"relay-010"}
 
@@ -153,23 +164,104 @@ def create_mock_peers() -> dict[str, Peer]:
                 display_name="\U0001f43b Alice",
                 signal_quality=85,
                 is_repeater=False,
-                latitude=37.7849,
-                longitude=-122.4094,
+                latitude=37.8030,
+                longitude=-122.4420,
                 location_updated=now,
                 is_favorite=True,
+            ),
+            # [mock-rooms] two room servers (advert type 3) for the Rooms screen
+            "\U0001f3e0 Bay Area Hub": Peer(
+                peer_id="room-001",
+                display_name="\U0001f3e0 Bay Area Hub",
+                signal_quality=64,
+                is_repeater=False,
+                latitude=37.7600,
+                longitude=-122.4150,
+                location_updated=now,
+                public_key=mock_public_key("room-001"),
+                node_type=3,
+            ),
+            "\U0001f3e0 East Bay Ops": Peer(
+                peer_id="room-002",
+                display_name="\U0001f3e0 East Bay Ops",
+                signal_quality=49,
+                is_repeater=False,
+                latitude=37.7790,
+                longitude=-122.1690,
+                location_updated=now,
+                public_key=mock_public_key("room-002"),
+                node_type=3,
             ),
             "\U0001f680 Bob": Peer(
                 peer_id="peer-bob",
                 display_name="\U0001f680 Bob",
                 signal_quality=72,
                 is_repeater=False,
-                latitude=37.7649,
-                longitude=-122.4294,
+                latitude=37.7290,
+                longitude=-122.3960,
                 location_updated=now,
             ),
         }
     )
     return peers
+
+
+# [mock-rooms] posts a room server pushes after login: (room, author, minutes ago, text)
+MOCK_ROOM_POSTS: list[tuple[str, str, int, str]] = [
+    (
+        "\U0001f3e0 Bay Area Hub",
+        "K6MESH",
+        310,
+        "Morning all. Sutro D back on battery after the storm.",
+    ),
+    (
+        "\U0001f3e0 Bay Area Hub",
+        "nightowl",
+        240,
+        "Seeing Berkeley Hills F at -8 dB from Oakland, antenna looks off.",
+    ),
+    (
+        "\U0001f3e0 Bay Area Hub",
+        "K6MESH",
+        200,
+        "Thanks, will climb up and check the connector on Saturday.",
+    ),
+    (
+        "\U0001f3e0 Bay Area Hub",
+        "trailrunner",
+        95,
+        "Relay A heard me from Twin Peaks summit, nice coverage.",
+    ),
+    (
+        "\U0001f3e0 Bay Area Hub",
+        "nightowl",
+        40,
+        "Meetup Sunday 10:00 at the Ferry Building, bring radios.",
+    ),
+    (
+        "\U0001f3e0 East Bay Ops",
+        "opsdesk",
+        600,
+        "Alameda J firmware update to 1.18 planned tonight.",
+    ),
+    ("\U0001f3e0 East Bay Ops", "opsdesk", 120, "Update done, Alameda J answering polls again."),
+]
+
+
+def create_mock_room_posts() -> dict[str, list[Message]]:
+    now = datetime.now(UTC)
+    posts: dict[str, list[Message]] = {}
+    for room, author, minutes, text in MOCK_ROOM_POSTS:
+        posts.setdefault(room, []).append(
+            Message(
+                message_id=str(uuid4()),
+                sender_id=author,
+                body=text,
+                channel_id=f"room:{room}",
+                created_at=now - timedelta(minutes=minutes),
+            )
+        )
+    return posts
 
 
 def create_mock_messages() -> list[Message]:
@@ -289,6 +381,103 @@ def create_mock_boot_events() -> list[dict]:
         {"type": "peer_seen", "data": {"peer": "\U0001f4e1 Relay A", "rssi": -66}},
         {"type": "peer_seen", "data": {"peer": "\U0001f4e1 Backhaul B", "rssi": -71}},
     ]
+
+
+MOCK_SELF_KEY = "6b547fd13630e0f7a6b167df23b9876543210abcdef0123456789abcdef0a619"
+
+
+def _mock_repeater_packets(now: datetime) -> list[dict]:
+    """Packets involving the mock repeaters, one of each kind Repeaters > Packets
+    tells apart: its advert (from), a reply to us (from), a login to it (to), a
+    flood we heard it relay (heard) and one it relayed further out (via)."""
+    hops = {pid: mock_public_key(pid)[:2].upper() for _n, pid, *_r in MOCK_REPEATERS}
+    me = MOCK_SELF_KEY[:2]
+    packets: list[dict] = []
+    for i, (name, pid, lat, lon, _signal, _fav) in enumerate(MOCK_REPEATERS[:6]):
+        key = mock_public_key(pid)
+        nxt = MOCK_REPEATERS[(i + 1) % len(MOCK_REPEATERS)][1]
+        base = now - timedelta(minutes=5 + i * 7)
+
+        def pkt(minutes: float, seq: str, **data) -> dict:
+            h = hashlib.sha1(f"{pid}{seq}".encode()).hexdigest()[:12].upper()
+            data.setdefault("rssi", -70 - i * 4)
+            data.setdefault("snr", round(8.0 - i * 1.75, 2))
+            data.setdefault("path_len", len(data.get("path_hops", [])))
+            data["packet_hash"] = h
+            return {
+                "type": "packet",
+                "received_at": (base - timedelta(minutes=minutes)).isoformat(),
+                "data": data,
+            }
+
+        packets += [
+            pkt(
+                0,
+                "advert",
+                payload_type=4,
+                payload_type_name="ADVERT",
+                route_type=1,
+                route_type_name="FLOOD",
+                sender_name=name,
+                advert_name=name,
+                advert_type=2,
+                sender_id=key[:16],
+                sender_pubkey=key,
+                advert_lat=lat,
+                advert_lon=lon,
+                payload_hex=key[:48],
+                path_hops=[],
+            ),
+            pkt(
+                1,
+                "resp",
+                payload_type=1,
+                payload_type_name="RESPONSE",
+                route_type=2,
+                route_type_name="DIRECT",
+                sender_name=name,
+                payload_hex=f"{me}{key[:2]}5a3c0e7f19b2d4a6c8e0f1",
+                path_hops=[],
+            ),
+            pkt(
+                1.5,
+                "login",
+                payload_type=7,
+                payload_type_name="ANON_REQ",
+                route_type=1,
+                route_type_name="FLOOD",
+                sender_name="Unknown",
+                payload_hex=f"{key[:2]}{MOCK_SELF_KEY}9e1f",
+                path_hops=[hops[nxt]],
+            ),
+            pkt(
+                3,
+                "heard",
+                payload_type=5,
+                payload_type_name="GRP_TXT",
+                route_type=1,
+                route_type_name="FLOOD",
+                sender_name="\U0001f43b Alice",
+                channel_name="public",
+                payload_text=f"Checking in through {name}",
+                payload_hex="c4a17e09b3d25f68",
+                path_hops=[hops[nxt], hops[pid]],
+            ),
+            pkt(
+                4,
+                "via",
+                payload_type=5,
+                payload_type_name="GRP_TXT",
+                route_type=1,
+                route_type_name="FLOOD",
+                sender_name="\U0001f680 Bob",
+                channel_name="public",
+                payload_text="Anyone on the east side?",
+                payload_hex="7be2d0915fa3c846",
+                path_hops=[hops[pid], hops[nxt]],
+            ),
+        ]
+    return packets
 
 
 def create_mock_packet_events() -> list[dict]:
@@ -800,6 +989,8 @@ def create_mock_packet_events() -> list[dict]:
         day = now if i < TODAY_COUNT else yesterday
         seed = pkt["data"]["packet_hash"]
         pkt["received_at"] = _mock_ts(seed, day)
+
+    packets += _mock_repeater_packets(now)  # [repeater-packets] Repeaters > Packets
 
     # Derive wire-level fields so the analyzer details panel can display them
     for pkt in packets:

@@ -277,6 +277,25 @@ class AdminView(Gtk.Box):
             console_page, Gtk.Label(label="Console")
         )
 
+        # Packets tab: the Analyzer's stream, only this repeater's packets [repeater-packets]
+        from meshcore_console.meshcore.packet_store import MAX_PACKETS
+        from meshcore_console.ui_gtk.views.analyzer import AnalyzerView
+
+        self._packets_key = ""
+        self._packets_shared: set[str] = set()
+        self._packets_view = AnalyzerView(
+            service,
+            event_store,
+            layout,
+            record_filter=self._packet_matches,
+            link_label=self._packet_link,
+            history=MAX_PACKETS,  # everything stored: one repeater's share is small
+            wrap_filters=True,  # the panel is narrower than the Analyzer screen
+        )
+        for side in ("start", "end", "top", "bottom"):
+            getattr(self._packets_view, f"set_margin_{side}")(4)
+        self._notebook.append_page(self._packets_view, Gtk.Label(label="Packets"))
+
         # Log tab: background logins, polls and traces [activity-log]
         self._notebook.append_page(self._build_log_tab(), Gtk.Label(label="Log"))
 
@@ -437,6 +456,33 @@ class AdminView(Gtk.Box):
 
         self._set_cli_sensitive(False)
         return box
+
+    # --- [repeater-packets] Packets tab -----------------------------------------
+    def _show_repeater_packets(self, peer: Peer) -> None:
+        from meshcore_console.meshcore.repeater_packets import shared_prefixes
+
+        key = (peer.public_key or "").lower()
+        others = [p.public_key for p in self._service.list_peers() if p.public_key]
+        self._packets_shared = shared_prefixes(others)
+        if key != self._packets_key:
+            self._packets_key = key
+            self._packets_view.set_record_filter(self._packet_matches)
+
+    def _packet_link(self, record) -> str | None:
+        from meshcore_console.meshcore.repeater_packets import packet_relation
+
+        return packet_relation(
+            self._packets_key,
+            sender_pubkey=record.sender_pubkey,
+            payload_type=record.payload_type_int,
+            payload_hex=record.raw_hex,
+            route_type=record.route_type,
+            path_hops=record.path_hops,
+            shared=self._packets_shared,
+        )
+
+    def _packet_matches(self, record) -> bool:
+        return self._packet_link(record) is not None
 
     # --- [activity-log] Log tab --------------------------------------------------
     _LOG_MAX_ROWS = 300
@@ -1687,6 +1733,7 @@ class AdminView(Gtk.Box):
         self._update_admin_path(peer)  # [admin-path patch]
         self._panel_stack.set_visible_child_name("admin")
         self._render_log()  # [activity-log] this repeater's entries
+        self._show_repeater_packets(peer)  # [repeater-packets]
 
         # Update login state UI
         state = self._service.get_repeater_login_state(peer.display_name)
@@ -2652,7 +2699,7 @@ class AdminView(Gtk.Box):
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         box.add_css_class("linked")
         self._tab_btns = []
-        for i, name in enumerate(("Status", "Graph", "Console", "Log")):
+        for i, name in enumerate(("Status", "Graph", "Console", "Packets", "Log")):
             btn = Gtk.ToggleButton(label=name)
             if self._tab_btns:
                 btn.set_group(self._tab_btns[0])

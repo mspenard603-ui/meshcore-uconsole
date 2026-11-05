@@ -29,11 +29,14 @@ def test_only_mutual_fresh_links_between_favourites() -> None:
     assert sorted(sorted(_ids(link)) for link in mesh.links) == [
         ["relay-001", "relay-004"],
         ["relay-001", "relay-005"],
+        ["relay-001", "relay-009"],
         ["relay-002", "relay-005"],
         ["relay-002", "relay-006"],
         ["relay-004", "relay-008"],
+        ["relay-005", "relay-006"],
+        ["relay-005", "relay-009"],
     ]
-    # A-C and D-G hear each other but C and G are not favourites
+    # A-C, I-C and B-G hear each other but C and G are not favourites
     assert not any({"relay-003", "relay-007"} & _ids(link) for link in mesh.links)
 
 

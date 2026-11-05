@@ -11,10 +11,11 @@
                     .:[  c  o  n  s  o  l  e  ]:.         -mLs!
 ```
 
-A GTK-based native desktop application for interacting with
-[MeshCore](https://meshcore.co.uk/) radios on Raspberry Pi. Supports all
-hardware that [openhop-core](https://github.com/openhop-dev/openhop_core) supports,
-including the [HackerGadgets AIO](https://hackergadgets.com/products/uconsole-aio-v2)
+A GTK-based native desktop application for interacting with 
+[MeshCore](https://meshcore.co.uk/) radios on Raspberry Pi.
+
+Supports all hardware that [openhop-core](https://github.com/openhop-dev/openhop_core)
+supports, including the [HackerGadgets AIO](https://hackergadgets.com/products/uconsole-aio-v2)
 (uConsole), Waveshare LoRa HATs, and meshadv-mini boards. Built-in hardware
 presets let you switch between boards without manually configuring every pin.
 
@@ -60,13 +61,28 @@ sudo apt install ./meshcore-uconsole_*~trixie_arm64.deb
 
 ## Screenshots
 
-| Analyzer | Peers |
-|----------|-------|
-| ![Analyzer](docs/analyzer.png) | ![Peers](docs/peers.png) |
-
-| Channels | Map |
+| Analyzer | Map |
 |----------|-----|
-| ![Channels](docs/channels.png) | ![Map](docs/map.png) |
+| ![Analyzer](docs/analyzer.png) | ![Map](docs/map.png) |
+| Every packet decoded live, with signal, route and raw bytes. | Favourite repeaters that hear each other, with the SNR of each link both ways. |
+
+| Contacts | Channels |
+|----------|----------|
+| ![Contacts](docs/contacts.png) | ![Channels](docs/channels.png) |
+| Contacts with signal, location, network path and telemetry. | Group channels and direct messages, with the route of each message. |
+
+| Rooms | Repeaters › Graph |
+|-------|-------------------|
+| ![Rooms](docs/rooms.png) | ![Repeater graph](docs/repeater-graph.png) |
+| Log in to room servers, read their posts and post to them. | Polled repeater stats over time: packets, errors, signal, battery, neighbours, traces. |
+
+| Repeaters › Packets | |
+|---------------------|-|
+| ![Repeater packets](docs/repeater-packets.png) | |
+| Just one repeater's packets, and how each one involves it (from, to, heard, via). | |
+
+Screenshots come from mock mode; regenerate them with
+`nix develop path:. --command uv run python scripts/screenshots.py`.
 
 ## Prerequisites
 

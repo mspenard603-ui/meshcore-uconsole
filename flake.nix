@@ -67,6 +67,7 @@
             pkgs.uv
             pkgs.gobject-introspection
             pkgs.pkg-config
+            pkgs.git-lfs # docs/*.png screenshots are stored in Git LFS
           ] ++ runtimeLibs;
 
           # Help GI and dynamic linker find typelibs and native libs in dev shell.

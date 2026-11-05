@@ -821,3 +821,48 @@ row:focus-visible {
 .activity-log-copy:hover {
   color: @mc_text;
 }
+
+/* Repeaters > Packets: how each packet involves the repeater */
+.packet-link {
+  font-family: monospace;
+  font-weight: 700;
+}
+
+.packet-link-from {
+  color: @mc_accent;
+}
+
+.packet-link-to {
+  color: @mc_warn;
+}
+
+.packet-link-heard {
+  color: @mc_text;
+}
+
+.packet-link-via {
+  color: @mc_text_muted;
+}
+
+/* Repeaters > Packets: the Analyzer's toolbar in a narrow panel */
+.analyzer-toolbar-compact {
+  padding: 4px 8px;
+}
+
+.analyzer-toolbar-compact flowboxchild {
+  padding: 0;
+}
+
+.analyzer-toolbar-compact .analyzer-filter {
+  font-size: 11px;
+  padding: 1px 7px;
+  min-height: 22px;
+  border-width: 1px;
+  border-radius: 6px;
+}
+
+.analyzer-toolbar-compact .circular {
+  min-width: 26px;
+  min-height: 26px;
+  padding: 0;
+}

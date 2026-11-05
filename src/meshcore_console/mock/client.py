@@ -303,6 +303,10 @@ class MockMeshcoreClient(MeshcoreService):
         import math
 
         day = math.sin(2 * math.pi * (t % 86400) / 86400)
+        # Counters climb faster by day than at night (busier mesh), with some
+        # jitter, so Graph > Packets shows a realistic rate, not a flat line.
+        busy = 1500 * math.sin(2 * math.pi * (t % 86400) / 86400 - 1.2)
+        jitter = rnd.randint(0, 25)
         return {
             "type": "stats",
             "batt_milli_volts": int(4100 - (i % 2000) / 4),
@@ -310,19 +314,19 @@ class MockMeshcoreClient(MeshcoreService):
             "last_rssi": round(-96 + 6 * day + rnd.gauss(0, 4)),
             "last_snr": round(rnd.uniform(-4, 10) * 4) / 4,
             "curr_tx_queue_len": rnd.randint(0, 2),
-            "n_packets_recv": 50000 + i * 40,
-            "n_packets_sent": 21000 + i * 15,
+            "n_packets_recv": int(50000 + i * 40 + busy + jitter),
+            "n_packets_sent": int(21000 + i * 15 + busy * 0.35 + jitter // 3),
             "total_air_time_secs": 9000 + i * 4,
             "total_up_time_secs": 400000 + i * 300,
             "n_sent_flood": 18000 + i * 12,
             "n_sent_direct": 3000 + i * 3,
             "n_recv_flood": 45000 + i * 35,
             "n_recv_direct": 5000 + i * 5,
-            "err_events": 3,
+            "err_events": 3 + i // 90,
             "n_direct_dups": 120,
             "n_flood_dups": 9000 + i * 8,
             "total_rx_air_time_secs": 30000 + i * 12,
-            "n_recv_errors": 40,
+            "n_recv_errors": int(40 + i * 0.3 + 2 * math.sin(i / 9.0)),  # never falls
         }
 
     def get_repeater_samples(self):
@@ -476,7 +480,9 @@ class MockMeshcoreClient(MeshcoreService):
 
     def get_self_public_key(self) -> str | None:
         """Return a mock public key for testing."""
-        return "6b547fd13630e0f7a6b167df23b9876543210abcdef0123456789abcdef0a619"
+        from .data import MOCK_SELF_KEY
+
+        return MOCK_SELF_KEY
 
     # -- Repeater admin (mock) -------------------------------------------------
 
@@ -541,6 +547,54 @@ class MockMeshcoreClient(MeshcoreService):
             "command": command,
             "response_text": response_text,
         }
+
+    # --- [mock-rooms] room servers ------------------------------------------
+    def _rooms(self) -> dict[str, list[Message]]:
+        rooms = getattr(self, "_mock_room_posts", None)
+        if rooms is None:
+            import time
+
+            from .data import create_mock_room_posts
+
+            rooms = self._mock_room_posts = create_mock_room_posts()
+            first = next(iter(rooms), None)
+            self._room_sessions = (
+                {first: {"time": time.time() - 1800, "role": "read/write"}} if first else {}
+            )
+        return rooms
+
+    def list_room_posts(self, room_name: str, limit: int = 200) -> list[Message]:
+        return self._rooms().get(room_name, [])[-limit:]
+
+    def mark_room_read(self, room_name: str) -> None:
+        return None
+
+    def room_unread(self, room_name: str) -> int:
+        return 0
+
+    def get_room_login_state(self, room_name: str) -> dict | None:
+        self._rooms()
+        return self._room_sessions.get(room_name)
+
+    def login_to_room(self, room_name: str, password: str, *, save_password: bool = False) -> dict:
+        import time
+
+        self._rooms()
+        self._room_sessions[room_name] = {"time": time.time(), "role": "read/write"}
+        return {"success": True}
+
+    def send_room_post(self, room_name: str, text: str) -> dict:
+        self._rooms().setdefault(room_name, []).append(
+            Message(
+                message_id=str(uuid4()),
+                sender_id=self._settings.node_name,
+                body=text,
+                channel_id=f"room:{room_name}",
+                created_at=datetime.now(UTC),
+                is_outgoing=True,
+            )
+        )
+        return {"success": True}
 
     def get_repeater_login_state(self, peer_name: str) -> RepeaterLoginState | None:
         return self._repeater_sessions.get(peer_name)
