@@ -1,4 +1,6 @@
 # meshcore-uconsole
+
+```text
  _______ _______ _______ _______ _______ _______ _______ _______
 |   |   |   _   |   _   |   Y   |   _   |   _   |   _   \   _   |
 |.      |.  1___|   1___|.  1   |.  1___|.  |   |.  l   /.  1___|
@@ -7,6 +9,7 @@
 |::.|:. |::.. . |::.. . |::.|:. |::.. . |::.. . |::.|:. |::.. . |
 `--- ---`-------`-------`--- ---`-------`-------`--- ---`-------'
                     .:[  c  o  n  s  o  l  e  ]:.         -mLs!
+```
 
 A GTK-based native desktop application for interacting with
 [MeshCore](https://meshcore.co.uk/) radios on Raspberry Pi. Supports all
