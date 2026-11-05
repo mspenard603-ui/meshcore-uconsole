@@ -552,14 +552,12 @@ row:focus-visible {
   background: alpha(@mc_surface_alt, 0.95);
 }
 
-.map-control-active {
-  background: alpha(@mc_accent, 0.25);
-  border-color: @mc_accent;
-  color: @mc_accent;
-}
-
+/* Active map buttons: solid dark ground so the green icon reads on light tiles */
+.map-control-active,
 .map-control-active:hover {
-  background: alpha(@mc_accent, 0.35);
+  background: @mc_bg;
+  border: 2px solid @mc_accent;
+  color: @mc_accent;
 }
 
 .map-details-panel {
@@ -800,4 +798,26 @@ row:focus-visible {
   font-size: 12px;
   padding: 2px 8px;
   min-height: 24px;
+}
+
+/* Repeaters > Status > Location mini map */
+.mini-map {
+  border: 1px solid @mc_border;
+  border-radius: 8px;
+}
+
+/* Repeaters > Log: keep text clear of the copy icon in the top-right corner */
+.activity-log {
+  padding-right: 40px;
+}
+
+.activity-log-copy {
+  min-width: 28px;
+  min-height: 28px;
+  padding: 2px;
+  color: @mc_text_muted;
+}
+
+.activity-log-copy:hover {
+  color: @mc_text;
 }

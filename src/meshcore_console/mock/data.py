@@ -67,59 +67,109 @@ def create_mock_channels() -> dict[str, Channel]:
     }
 
 
+def mock_public_key(peer_id: str) -> str:
+    """A stable, made-up 64-hex public key for a mock peer."""
+    return hashlib.sha256(peer_id.encode()).hexdigest()
+
+
+# Mock repeaters: (name, peer_id, lat, lon, signal %, favourite). Ten around the
+# Bay, most of them favourites, so the Map's favourite links have something to show.
+MOCK_REPEATERS: list[tuple[str, str, float, float, int, bool]] = [
+    ("\U0001f4e1 Relay A", "relay-001", 37.7749, -122.4194, 78, True),  # SF downtown
+    ("\U0001f4e1 Backhaul B", "relay-002", 37.8044, -122.2712, 61, True),  # Oakland
+    ("\U0001f4e1 Hilltop C", "relay-003", 37.7575, -122.4376, 44, False),  # Twin Peaks
+    ("\U0001f4e1 Sutro D", "relay-004", 37.7552, -122.4528, 70, True),  # Sutro Tower
+    ("\U0001f4e1 Bay Bridge E", "relay-005", 37.7983, -122.3778, 66, True),  # Yerba Buena
+    ("\U0001f4e1 Berkeley Hills F", "relay-006", 37.8810, -122.2440, 52, True),  # Grizzly Peak
+    ("\U0001f4e1 Davidson G", "relay-007", 37.7383, -122.4535, 38, False),  # Mt Davidson
+    ("\U0001f4e1 San Bruno H", "relay-008", 37.6879, -122.4330, 47, True),  # San Bruno Mtn
+    ("\U0001f4e1 Richmond I", "relay-009", 37.9358, -122.3478, 35, True),  # Richmond
+    ("\U0001f4e1 Alameda J", "relay-010", 37.7652, -122.2416, 58, True),  # Alameda
+]
+
+# Who hears whom (zero-hop adverts): (hearer, heard, SNR dB, hours since heard).
+# Mutual pairs of favourites are linked on the Map; the rest test the edge cases:
+#   H hears A but A doesn't list H     -> one way, not drawn
+#   F and I last heard each other 5 d ago -> too old, not drawn
+#   J (favourite) has no table yet      -> listed as "no neighbour list"
+#   C and G are not favourites           -> never drawn
+MOCK_NEIGHBOURS: list[tuple[str, str, float, float]] = [
+    ("relay-001", "relay-005", 7.5, 0.2),
+    ("relay-005", "relay-001", 6.25, 0.4),
+    ("relay-005", "relay-002", 4.0, 0.3),
+    ("relay-002", "relay-005", 3.25, 1.0),
+    ("relay-001", "relay-004", 2.5, 0.5),
+    ("relay-004", "relay-001", 1.75, 0.6),
+    ("relay-004", "relay-008", -5.0, 2.0),  # weak
+    ("relay-008", "relay-004", -6.25, 1.5),
+    ("relay-002", "relay-006", -8.5, 0.8),  # below the SF7 decode limit one way
+    ("relay-006", "relay-002", -3.0, 0.9),
+    ("relay-008", "relay-001", -2.0, 3.0),  # one way
+    ("relay-006", "relay-009", 1.0, 120.0),  # stale
+    ("relay-009", "relay-006", 0.5, 121.0),
+    ("relay-002", "relay-010", 9.0, 0.1),  # J has no table
+    ("relay-001", "relay-003", 8.0, 0.2),  # C, G: not favourites
+    ("relay-003", "relay-001", 7.0, 0.3),
+    ("relay-004", "relay-007", 5.5, 0.4),
+    ("relay-007", "relay-004", 5.0, 0.4),
+]
+MOCK_NO_TABLE = {"relay-010"}
+
+
+def mock_neighbour_rows(peer_id: str) -> list[tuple[str, int, int]] | None:
+    """A mock repeater's neighbour table as the firmware returns it (newest first),
+    or None for a repeater that has not answered a neighbour request."""
+    if peer_id in MOCK_NO_TABLE:
+        return None
+    rows = [
+        (mock_public_key(heard)[:8].upper(), int(hours * 3600), int(round(snr * 4)))
+        for hearer, heard, snr, hours in MOCK_NEIGHBOURS
+        if hearer == peer_id
+    ]
+    return sorted(rows, key=lambda r: r[1])
+
+
 def create_mock_peers() -> dict[str, Peer]:
-    """Create mock peers for testing (subset of MOCK_PEER_LOCATIONS with full Peer objects)."""
+    """Create mock peers for testing: ten repeaters and two companions."""
     now = datetime.now(UTC)
-    return {
-        "\U0001f4e1 Relay A": Peer(
-            peer_id="relay-001",
-            display_name="\U0001f4e1 Relay A",
-            signal_quality=78,
+    peers = {
+        name: Peer(
+            peer_id=peer_id,
+            display_name=name,
+            signal_quality=signal,
             is_repeater=True,
-            latitude=37.7749,
-            longitude=-122.4194,
+            latitude=lat,
+            longitude=lon,
             location_updated=now,
-            is_favorite=True,
-        ),
-        "\U0001f4e1 Backhaul B": Peer(
-            peer_id="relay-002",
-            display_name="\U0001f4e1 Backhaul B",
-            signal_quality=61,
-            is_repeater=True,
-            latitude=37.8044,
-            longitude=-122.2712,
-            location_updated=now,
-            is_favorite=True,
-        ),
-        "\U0001f4e1 Hilltop C": Peer(
-            peer_id="relay-003",
-            display_name="\U0001f4e1 Hilltop C",
-            signal_quality=44,
-            is_repeater=True,
-            latitude=37.7575,
-            longitude=-122.4376,
-            location_updated=now,
-        ),
-        "\U0001f43b Alice": Peer(
-            peer_id="peer-alice",
-            display_name="\U0001f43b Alice",
-            signal_quality=85,
-            is_repeater=False,
-            latitude=37.7849,
-            longitude=-122.4094,
-            location_updated=now,
-            is_favorite=True,
-        ),
-        "\U0001f680 Bob": Peer(
-            peer_id="peer-bob",
-            display_name="\U0001f680 Bob",
-            signal_quality=72,
-            is_repeater=False,
-            latitude=37.7649,
-            longitude=-122.4294,
-            location_updated=now,
-        ),
+            is_favorite=favourite,
+            public_key=mock_public_key(peer_id),
+        )
+        for name, peer_id, lat, lon, signal, favourite in MOCK_REPEATERS
     }
+    peers.update(
+        {
+            "\U0001f43b Alice": Peer(
+                peer_id="peer-alice",
+                display_name="\U0001f43b Alice",
+                signal_quality=85,
+                is_repeater=False,
+                latitude=37.7849,
+                longitude=-122.4094,
+                location_updated=now,
+                is_favorite=True,
+            ),
+            "\U0001f680 Bob": Peer(
+                peer_id="peer-bob",
+                display_name="\U0001f680 Bob",
+                signal_quality=72,
+                is_repeater=False,
+                latitude=37.7649,
+                longitude=-122.4294,
+                location_updated=now,
+            ),
+        }
+    )
+    return peers
 
 
 def create_mock_messages() -> list[Message]:

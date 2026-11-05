@@ -92,6 +92,11 @@ def trace_source(name: str):
         _LOCAL.source = previous
 
 
+def current_trace_source() -> str | None:
+    """Who started the trace running on this thread (see trace_source)."""
+    return getattr(_LOCAL, "source", None)
+
+
 def trace_in_progress() -> bool:
     return _IN_FLIGHT["busy"]
 

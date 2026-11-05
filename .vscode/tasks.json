@@ -1,0 +1,25 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Run app (mock)",
+      "type": "shell",
+      "command": "./scripts/run-dev.sh",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "Run tests",
+      "type": "shell",
+      "command": "nix develop path:. --command uv run pytest -q",
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "Lint (pre-commit, all files)",
+      "type": "shell",
+      "command": "nix develop path:. --command uv run pre-commit run --all-files",
+      "problemMatcher": []
+    }
+  ]
+}

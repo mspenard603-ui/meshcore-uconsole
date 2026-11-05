@@ -78,6 +78,9 @@ class MeshcoreClient(MeshcoreService):
         from meshcore_console.meshcore.repeater_stats import open_sample_store
 
         self._repeater_samples = open_sample_store()  # [repeater-stats patch]
+        from meshcore_console.meshcore import activity_log  # [persist patch]
+
+        activity_log.ACTIVITY.attach_store(self._repeater_samples)
         self._channel_secrets = ChannelDatabase(self._db)
         self._repeater_sessions: dict[str, RepeaterLoginState] = {}
         # Load persisted state
@@ -1255,11 +1258,25 @@ class MeshcoreClient(MeshcoreService):
         if not self._connected or node is None:
             return {"success": False, "reason": "Radio not connected"}
         try:
-            return self._run_async(
+            result = self._run_async(
                 request_neighbours(node=node, contact_name=peer_name, timeout=10.0), timeout=50.0
             )
         except Exception as exc:  # noqa: BLE001
             return {"success": False, "reason": str(exc) or type(exc).__name__}
+        self._save_neighbour_table(peer_name, result)  # [favorite-links patch]
+        return result
+
+    def _save_neighbour_table(self, peer_name: str, result: dict) -> None:
+        """Keep a repeater's latest keyed neighbour table for the Map's favourite links."""
+        from meshcore_console.meshcore.favorite_links import save_neighbour_table
+
+        peer = self._peers.get(peer_name)
+        if not result.get("success") or peer is None or not peer.public_key:
+            return
+        try:
+            save_neighbour_table(self._repeater_samples, peer.public_key, result.get("rows", []))
+        except Exception:  # noqa: BLE001 - the table is a nice-to-have
+            logger.exception("could not save the neighbour table of %s", peer_name)
 
     def request_repeater_neighbour_counts(self, peer_name: str) -> dict:
         """Neighbour list without key prefixes (26 per reply, so 2 replies for a full
@@ -1269,19 +1286,29 @@ class MeshcoreClient(MeshcoreService):
         node = getattr(self._session, "_node", None)
         if not self._connected or node is None:
             return {"success": False, "reason": "Radio not connected"}
+        # [favorite-links patch] favourites are polled with 4-byte key prefixes, so the
+        # Map can tell which favourites hear each other; the rest stay prefix-less
+        # (26 entries a reply instead of 14: half the airtime).
+        peer = self._peers.get(peer_name)
+        keyed = peer is not None and peer.is_favorite and bool(peer.public_key)
         try:
             result = self._run_async(
                 request_neighbours(
-                    node=node, contact_name=peer_name, timeout=10.0, prefix_len=0, max_pages=3
+                    node=node,
+                    contact_name=peer_name,
+                    timeout=10.0,
+                    prefix_len=4 if keyed else 0,
+                    max_pages=4 if keyed else 3,
                 ),
-                timeout=40.0,
+                timeout=50.0 if keyed else 40.0,
             )
         except Exception as exc:  # noqa: BLE001
             return {"success": False, "reason": str(exc) or type(exc).__name__}
         if not result.get("success"):
             return result
+        if keyed:
+            self._save_neighbour_table(peer_name, result)
         counts = neighbour_counts(result.get("rows", []), result.get("total", 0))
-        peer = self._peers.get(peer_name)
         if peer is not None and peer.public_key:
             self._repeater_samples.add(peer.public_key, "neighbours", data=counts)
         return {"success": True, **counts}
@@ -1339,6 +1366,16 @@ class MeshcoreClient(MeshcoreService):
 
     def trace_repeater(self, peer_name: str) -> dict:
         """Round-trip TRACE to a repeater along its stored path. [trace patch]"""
+        from meshcore_console.meshcore.activity_log import log_trace_activity
+        from meshcore_console.meshcore.trace import current_trace_source
+
+        result = self._trace_repeater(peer_name)
+        peer = self._peers.get(peer_name)
+        key = (peer.public_key or peer.peer_id) if peer is not None else peer_name
+        log_trace_activity(key, peer_name, result, current_trace_source())  # Repeaters > Log
+        return result
+
+    def _trace_repeater(self, peer_name: str) -> dict:
         from meshcore_console.meshcore.trace import run_trace, trace_route
 
         node = getattr(self._session, "_node", None)

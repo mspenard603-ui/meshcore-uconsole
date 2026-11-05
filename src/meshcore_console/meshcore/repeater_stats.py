@@ -65,6 +65,31 @@ CREATE TABLE IF NOT EXISTS peer_types (
     node_type INTEGER NOT NULL,
     updated REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS repeater_activity (
+    id INTEGER PRIMARY KEY,
+    pubkey TEXT NOT NULL,
+    name TEXT NOT NULL,
+    ts REAL NOT NULL,
+    kind TEXT NOT NULL,
+    text TEXT NOT NULL,
+    ok INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_repeater_activity ON repeater_activity (ts);
+CREATE TABLE IF NOT EXISTS repeater_console (
+    id INTEGER PRIMARY KEY,
+    pubkey TEXT NOT NULL,
+    ts REAL NOT NULL,
+    kind TEXT NOT NULL,
+    text TEXT NOT NULL,
+    data TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_repeater_console ON repeater_console (pubkey, id);
+CREATE TABLE IF NOT EXISTS repeater_state (
+    pubkey TEXT NOT NULL,
+    name TEXT NOT NULL,
+    value TEXT NOT NULL,
+    PRIMARY KEY (pubkey, name)
+);
 CREATE TABLE IF NOT EXISTS repeater_info (
     pubkey TEXT NOT NULL,
     kind TEXT NOT NULL,
@@ -357,6 +382,96 @@ class RepeaterSampleStore:
                 "DELETE FROM repeater_traces WHERE ts < ?", (now - RETENTION_DAYS * 86400,)
             )
             self._conn.commit()
+
+    # --- [persist patch] Repeaters > Log, console history, small per-repeater state.
+    # Keyed by the app's repeater key (public key, else peer id) exactly as given.
+
+    def add_activity(
+        self, pubkey: str, name: str, kind: str, text: str, ok: bool | None, ts: float
+    ) -> int:
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO repeater_activity (pubkey, name, ts, kind, text, ok) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (pubkey, name, ts, kind, text, None if ok is None else int(ok)),
+            )
+            self._prune_persisted(ts)
+            self._conn.commit()
+            return int(cur.lastrowid)
+
+    def activity_rows(self, limit: int) -> list[dict]:
+        """The newest *limit* activity entries, oldest first."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, pubkey, name, ts, kind, text, ok FROM repeater_activity "
+                "ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [
+            {
+                "id": r[0],
+                "pubkey": r[1],
+                "name": r[2],
+                "ts": r[3],
+                "kind": r[4],
+                "text": r[5],
+                "ok": None if r[6] is None else bool(r[6]),
+            }
+            for r in reversed(rows)
+        ]
+
+    def add_console(self, pubkey: str, kind: str, text: str, data: dict | None = None) -> None:
+        now = time.time()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO repeater_console (pubkey, ts, kind, text, data) VALUES (?, ?, ?, ?, ?)",
+                (
+                    pubkey,
+                    now,
+                    kind,
+                    text,
+                    json.dumps(data, default=str) if data is not None else None,
+                ),
+            )
+            self._prune_persisted(now)
+            self._conn.commit()
+
+    def console_rows(self, pubkey: str, limit: int) -> list[dict]:
+        """The newest *limit* console rows of one repeater, oldest first."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT ts, kind, text, data FROM repeater_console WHERE pubkey = ? "
+                "ORDER BY id DESC LIMIT ?",
+                (pubkey, limit),
+            ).fetchall()
+        return [
+            {"ts": r[0], "kind": r[1], "text": r[2], "data": json.loads(r[3]) if r[3] else None}
+            for r in reversed(rows)
+        ]
+
+    def get_state(self, pubkey: str, name: str) -> Any:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT value FROM repeater_state WHERE pubkey = ? AND name = ?", (pubkey, name)
+            ).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def set_state(self, pubkey: str, name: str, value: Any) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO repeater_state (pubkey, name, value) VALUES (?, ?, ?)",
+                (pubkey, name, json.dumps(value)),
+            )
+            self._conn.commit()
+
+    def _prune_persisted(self, now: float) -> None:
+        """Hourly, under the lock: activity and console rows older than the retention."""
+        if now - getattr(self, "_last_persist_prune", 0.0) < 3600:
+            return
+        cutoff = now - RETENTION_DAYS * 86400
+        self._conn.execute("DELETE FROM repeater_activity WHERE ts < ?", (cutoff,))
+        self._conn.execute("DELETE FROM repeater_console WHERE ts < ?", (cutoff,))
+        self._last_persist_prune = now
 
     def trace_series(self, pubkey: str, since: float) -> list[dict]:
         """Traces since *since*, oldest first: {t, ok, sf, rtt_ms, links:[[from,to,snr]], reason}."""

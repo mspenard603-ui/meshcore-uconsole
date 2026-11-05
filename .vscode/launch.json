@@ -1,0 +1,14 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "MeshCore Console (mock)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "meshcore_console.main",
+      "cwd": "${workspaceFolder}",
+      "env": { "MESHCORE_MOCK": "1" },
+      "justMyCode": true
+    }
+  ]
+}

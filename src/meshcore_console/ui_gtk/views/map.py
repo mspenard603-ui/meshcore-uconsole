@@ -191,6 +191,17 @@ class MapView(Gtk.Box):
         self._details_scroll.set_child(self._details_content)
         self._details_panel.append(self._details_scroll)
 
+        # SNR bubble styles go in now: adding a CSS provider later (on the first
+        # Plot path / favourite links click) restyles the whole window, which
+        # flashed the map blank for a frame.
+        from gi.repository import Gdk
+
+        provider = Gtk.CssProvider()
+        provider.load_from_data(self._SNR_CSS)
+        Gtk.StyleContext.add_provider_for_display(
+            Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+
         # Load MBTiles if available for offline support
         self._load_mbtiles()
 
@@ -228,6 +239,22 @@ class MapView(Gtk.Box):
         zoom_box.set_valign(Gtk.Align.END)
         zoom_box.set_margin_end(12)
         zoom_box.set_margin_bottom(12)
+
+        # [favorite-links patch] plot which favourite repeaters hear each other
+        self._fav_links_btn = Gtk.Button()
+        icon = Gtk.DrawingArea()
+        icon.set_size_request(18, 18)
+        icon.set_draw_func(self._draw_fav_links_icon)
+        self._fav_links_btn.set_child(icon)
+        self._fav_links_btn.add_css_class("map-control-button")
+        self._fav_links_btn.set_tooltip_text(
+            "Show links between favourite repeaters that hear each other"
+        )
+        self._fav_links_btn.update_property(
+            [Gtk.AccessibleProperty.LABEL], ["Favourite repeater links"]
+        )
+        self._fav_links_btn.connect("clicked", self._on_fav_links_clicked)
+        zoom_box.append(self._fav_links_btn)
 
         zoom_in = Gtk.Button.new_from_icon_name("zoom-in-symbolic")
         zoom_in.add_css_class("map-control-button")
@@ -865,6 +892,186 @@ class MapView(Gtk.Box):
                 pass
             self._snr_layer = None
 
+    # --- [favorite-links patch] ------------------------------------------------
+    # One line per pair of favourite repeaters whose neighbour tables list each
+    # other (heard within MAX_LINK_AGE_S), coloured by the weaker direction's
+    # margin over the decode limit, with both SNRs in a bubble at the midpoint.
+    _FAV_LINK_RGBA = {
+        "good": (0.208, 0.761, 0.608, 1.0),  # mc_accent
+        "weak": (0.937, 0.725, 0.247, 1.0),  # mc_warn
+        "bad": (1.0, 0.373, 0.427, 1.0),  # mc_danger
+    }
+
+    def _draw_fav_links_icon(self, area: Gtk.DrawingArea, cr, width: int, height: int) -> None:
+        """Three nodes joined by lines, in the button's text colour."""
+        import math
+
+        color = area.get_color()
+        cr.set_source_rgba(color.red, color.green, color.blue, color.alpha)
+        pts = (
+            (width * 0.2, height * 0.75),
+            (width * 0.5, height * 0.2),
+            (width * 0.82, height * 0.7),
+        )
+        cr.set_line_width(1.6)
+        for (xa, ya), (xb, yb) in zip(pts, pts[1:] + pts[:1]):
+            cr.move_to(xa, ya)
+            cr.line_to(xb, yb)
+        cr.stroke()
+        for x, y in pts:
+            cr.arc(x, y, 2.6, 0, 2 * math.pi)
+            cr.fill()
+
+    def _on_fav_links_clicked(self, btn: Gtk.Button) -> None:
+        if getattr(self, "_fav_layers", None):
+            self._clear_fav_links()
+            return
+        self._draw_fav_links()
+
+    def _clear_fav_links(self) -> None:
+        map_widget = self._map.get_map()
+        for layer in getattr(self, "_fav_layers", None) or []:
+            try:
+                map_widget.remove_layer(layer)
+            except Exception:  # noqa: BLE001
+                pass
+        self._fav_layers = []
+        self._fav_links_btn.remove_css_class("map-control-active")
+        self._fav_links_btn.set_tooltip_text(
+            "Show links between favourite repeaters that hear each other"
+        )
+
+    def _draw_fav_links(self) -> None:
+        import math
+
+        from gi.repository import Gdk
+
+        from meshcore_console.meshcore.favorite_links import (
+            MAX_LINK_AGE_S,
+            NEIGHBOUR_TABLE,
+            favorite_mesh,
+        )
+
+        self._clear_fav_links()
+        store = self._service.get_repeater_samples()
+        mesh = favorite_mesh(
+            self._service.list_peers(), lambda key: store.get_state(key, NEIGHBOUR_TABLE)
+        )
+        try:
+            from meshcore_console.meshcore.trace import SNR_LIMIT_DB
+
+            limit = SNR_LIMIT_DB.get(int(self._service.get_settings().spreading_factor), -7.5)
+        except Exception:  # noqa: BLE001
+            limit = -7.5
+
+        def merc(lat: float, lon: float) -> tuple[float, float]:
+            s = math.sin(math.radians(max(-85.0, min(85.0, lat))))
+            return (lon + 180.0) / 360.0, 0.5 - math.log((1 + s) / (1 - s)) / (4 * math.pi)
+
+        def grade(snr: float) -> str:
+            margin = snr - limit
+            return "bad" if margin < 0 else "weak" if margin < 5 else "good"
+
+        def ago(secs: int) -> str:
+            if secs < 3600:
+                return f"{max(1, secs // 60)} min ago"
+            if secs < 86400:
+                return f"{secs // 3600} h ago"
+            return f"{secs // 86400} d ago"
+
+        map_widget = self._map.get_map()
+        bubbles = Shumate.MarkerLayer.new(self._viewport)
+        layers = []
+        points: list[tuple[float, float]] = []
+        edge = Gdk.RGBA()
+        edge.red = edge.green = edge.blue = 0.0
+        edge.alpha = 0.8
+        for link in mesh.links:
+            a, b = link.a, link.b
+            worst = grade(min(link.snr_ab, link.snr_ba))
+            layer = Shumate.PathLayer.new(self._viewport)
+            rgba = Gdk.RGBA()
+            rgba.red, rgba.green, rgba.blue, rgba.alpha = self._FAV_LINK_RGBA[worst]
+            layer.set_stroke_color(rgba)
+            layer.set_stroke_width(5.0)
+            try:
+                layer.set_outline_color(edge)  # dark edge: reads on light tiles too
+                layer.set_outline_width(1.0)
+            except Exception:  # noqa: BLE001
+                layer.set_stroke_width(4.0)
+            for lat, lon in ((b.latitude, b.longitude), (a.latitude, a.longitude)):
+                layer.add_node(Shumate.Coordinate.new_full(lat, lon))  # add_node prepends
+            try:
+                map_widget.insert_layer_behind(layer, self._marker_layer)
+            except Exception:  # noqa: BLE001
+                map_widget.add_layer(layer)
+            layers.append(layer)
+            points += [(a.latitude, a.longitude), (b.latitude, b.longitude)]
+
+            (xa, ya), (xb, yb) = merc(a.latitude, a.longitude), merc(b.latitude, b.longitude)
+            sector = int(round(math.degrees(math.atan2(yb - ya, xb - xa)) / 45.0)) % 8
+            mx, my = (xa + xb) / 2, (ya + yb) / 2
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+            box.add_css_class("route-snr-bubble")
+            for arrow, value in (
+                (self._ARROWS[sector], link.snr_ab),
+                (self._ARROWS[(sector + 4) % 8], link.snr_ba),
+            ):
+                lab = Gtk.Label(label=f"{arrow} {value:+.1f}")
+                lab.set_xalign(0.0)
+                if grade(value) != "good":
+                    lab.add_css_class(f"route-snr-{grade(value)}")
+                box.append(lab)
+            box.set_tooltip_text(
+                f"{a.display_name} \u2192 {b.display_name}: {link.snr_ab:+.2f} dB\n"
+                f"{b.display_name} \u2192 {a.display_name}: {link.snr_ba:+.2f} dB\n"
+                f"From their neighbour tables, heard {ago(link.age_s)}\n"
+                f"SNR as measured by the receiving repeater (decode limit {limit:+.1f} dB)"
+            )
+            marker = Shumate.Marker.new()
+            marker.set_location(
+                math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * my)))), mx * 360.0 - 180.0
+            )
+            marker.set_child(box)
+            bubbles.add_marker(marker)
+        if mesh.links:
+            try:
+                map_widget.insert_layer_behind(bubbles, self._marker_layer)
+            except Exception:  # noqa: BLE001
+                map_widget.add_layer(bubbles)
+            layers.append(bubbles)
+            self._fit_route(points, only_if_hidden=True)
+            self._fav_links_btn.add_css_class("map-control-active")
+        self._fav_layers = layers
+
+        n = len(mesh.links)
+        # Short toast (a toast never wraps: a long one widens the window); the
+        # full breakdown, with names, goes in the button's tooltip and the log.
+        short = [f"{n} favourite link{'s' if n != 1 else ''}" if n else "No favourite links"]
+        detail = [
+            f"{n} link{'s' if n != 1 else ''} between favourite repeaters that hear each other"
+        ]
+        if mesh.one_way:
+            short.append(f"{len(mesh.one_way)} one-way")
+            detail.append(
+                "Heard one way only: "
+                + ", ".join(f"{a.display_name} \u2192 {b.display_name}" for a, b in mesh.one_way)
+            )
+        if mesh.stale:
+            short.append(f"{mesh.stale} stale")
+            detail.append(f"{mesh.stale} not heard in {MAX_LINK_AGE_S // 3600} h")
+        if mesh.no_table:
+            short.append(f"{len(mesh.no_table)} without neighbour list")
+            detail.append(
+                "No neighbour list yet (log in to poll): "
+                + ", ".join(p.display_name for p in mesh.no_table)
+            )
+        self._show_toast(" \u00b7 ".join(short) + " (details: hover the button)")
+        self._fav_links_btn.set_tooltip_text(
+            "Hide links between favourite repeaters\n\n" + "\n".join(detail)
+        )
+        logger.info("favourite links: %s", "; ".join(detail))
+
     def _route_nodes(self, peer: Peer) -> list[tuple[str, float | None, float | None]]:
         """(id, lat, lon) for you, each hop and the repeater; lat/lon None if unknown."""
         peers = self._service.list_peers()
@@ -919,16 +1126,7 @@ class MapView(Gtk.Box):
         import math
         from datetime import datetime
 
-        from gi.repository import Gdk
-
         self._clear_snr_bubbles()
-        if not getattr(self, "_snr_css_done", False):
-            provider = Gtk.CssProvider()
-            provider.load_from_data(self._SNR_CSS)
-            Gtk.StyleContext.add_provider_for_display(
-                Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
-            )
-            self._snr_css_done = True
         fresh = result is not None
         if result is None:
             result = self._latest_trace(peer)
@@ -1127,8 +1325,15 @@ class MapView(Gtk.Box):
             note.set_halign(Gtk.Align.START)
             results.append(note)
 
-    def _fit_route(self, points: list[tuple[float, float]]) -> None:
-        """Centre and zoom so the whole path is in view (Web Mercator maths)."""
+    def _fit_route(
+        self, points: list[tuple[float, float]], *, only_if_hidden: bool = False
+    ) -> None:
+        """Centre and zoom so the whole path is in view (Web Mercator maths).
+
+        With *only_if_hidden*, leave the view alone when every point is already on
+        screen. The move is animated: a jump to a new zoom showed only the tiles
+        already loaded, so for a moment the map covered part of its width.
+        """
         import math
 
         def merc_y(lat: float) -> float:
@@ -1140,6 +1345,16 @@ class MapView(Gtk.Box):
         ys = [merc_y(lat) for lat, _lon in points]
         w = max(self._map.get_width(), 200)
         h = max(self._map.get_height(), 200)
+        if only_if_hidden:
+            scale = 256 * 2 ** self._viewport.get_zoom_level()  # world width in px
+            cx0 = (self._viewport.get_longitude() + 180.0) / 360.0
+            cy0 = merc_y(self._viewport.get_latitude())
+            pad = 40  # px: a marker's label must fit too
+            if all(
+                abs((x - cx0) * scale) <= w / 2 - pad and abs((y - cy0) * scale) <= h / 2 - pad
+                for x, y in zip(xs, ys)
+            ):
+                return
         dx = max(max(xs) - min(xs), 1e-9) * 1.35
         dy = max(max(ys) - min(ys), 1e-9) * 1.35
         zoom = math.log2(min(w / (256 * dx), h / (256 * dy)))
@@ -1150,10 +1365,11 @@ class MapView(Gtk.Box):
         lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * cy))))
         if getattr(self, "_following", False):
             self._set_following(False)
-        self._programmatic_move = True
-        self._viewport.set_zoom_level(zoom)
-        self._viewport.set_location(lat, lon)
-        self._programmatic_move = False
+        map_widget = self._map.get_map()
+        if hasattr(map_widget, "go_to_full_with_duration"):  # libshumate >= 1.1
+            map_widget.go_to_full_with_duration(lat, lon, zoom, 600)
+        else:  # 1.0 (Raspberry Pi OS bookworm): animated, default duration
+            map_widget.go_to_full(lat, lon, zoom)
 
     def _switch_route_to(self, peer: Peer, result: dict) -> None:  # [path-owner patch]
         """A trace succeeded for a repeater other than the one plotted: plot this one instead."""

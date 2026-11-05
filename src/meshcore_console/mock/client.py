@@ -358,8 +358,40 @@ class MockMeshcoreClient(MeshcoreService):
                     )
                     if i % 4 == 0:
                         store.add(key, "stats", ts=t, **stats_sample(self._mock_stats(rnd, t, i)))
+            from meshcore_console.meshcore.favorite_links import save_neighbour_table
+
+            from .data import mock_neighbour_rows
+
+            for p in self._peers.values():  # [favorite-links patch] tables as if polled
+                rows = mock_neighbour_rows(p.peer_id) if p.is_repeater else None
+                if rows is not None and p.public_key:
+                    save_neighbour_table(store, p.public_key, rows, ts=now - 600)
             self._mock_samples = store
         return store
+
+    def request_repeater_neighbours(self, peer_name: str) -> dict:  # [favorite-links patch]
+        from meshcore_console.meshcore.favorite_links import save_neighbour_table
+
+        from .data import mock_neighbour_rows
+
+        peer = self._peers.get(peer_name)
+        rows = mock_neighbour_rows(peer.peer_id) if peer is not None else None
+        if rows is None:
+            return {"success": False, "reason": "No response after 10s"}
+        save_neighbour_table(self.get_repeater_samples(), peer.public_key or peer.peer_id, rows)
+        text = "\n".join(f"{k}:{s}:{n}" for k, s, n in rows) if rows else "-none-"
+        return {"success": True, "rows": rows, "total": len(rows), "text": text, "rtt_ms": 900}
+
+    def request_repeater_neighbour_counts(self, peer_name: str) -> dict:
+        from meshcore_console.meshcore.repeater_stats import neighbour_counts
+
+        result = self.request_repeater_neighbours(peer_name)
+        if not result.get("success"):
+            return result
+        counts = neighbour_counts(result["rows"], result["total"])
+        peer = self._peers[peer_name]
+        self.get_repeater_samples().add(peer.public_key or peer.peer_id, "neighbours", data=counts)
+        return {"success": True, **counts}
 
     def trace_repeater(self, peer_name: str) -> dict:  # [trace patch]
         import random
@@ -379,6 +411,12 @@ class MockMeshcoreClient(MeshcoreService):
         from meshcore_console.meshcore.trace import log_trace  # [trace-log patch]
 
         log_trace(self.get_repeater_samples(), peer.public_key or peer.peer_id, result, 7)
+        from meshcore_console.meshcore.activity_log import log_trace_activity
+        from meshcore_console.meshcore.trace import current_trace_source
+
+        log_trace_activity(
+            peer.public_key or peer.peer_id, peer_name, result, current_trace_source()
+        )
         return result
 
     def request_repeater_stats(self, peer_name: str) -> dict:

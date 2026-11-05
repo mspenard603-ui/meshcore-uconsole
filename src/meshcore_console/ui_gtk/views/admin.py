@@ -15,10 +15,13 @@ from meshcore_console.core.models import Peer
 from meshcore_console.core.radio import format_rssi, format_snr
 from meshcore_console.core.services import MeshcoreService
 from meshcore_console.core.time import to_local
+from meshcore_console.meshcore.activity_log import ACTIVITY, ActivityEntry
 from meshcore_console.ui_gtk.helpers import clear_children
 from meshcore_console.ui_gtk.layout import Layout
 from meshcore_console.ui_gtk.state import UiEventStore
 from meshcore_console.ui_gtk.widgets import DetailRow
+from meshcore_console.ui_gtk.widgets.mini_map import SHUMATE_AVAILABLE as MINI_MAP_AVAILABLE
+from meshcore_console.ui_gtk.widgets.mini_map import MiniMap
 
 if TYPE_CHECKING:
     from meshcore_console.core.models import RepeaterLoginState
@@ -118,6 +121,9 @@ class AdminView(Gtk.Box):
         self._autologin_attempts: dict[str, int] = {}
         self._autologin_suppressed: set[str] = set()  # manual logout this session
         self._relogin_needed: set[str] = set()
+        self._trace_retry_tally: dict[str, list[int]] = {}  # [persist patch]
+        self._last_trace: dict[str, float] = {}
+        self._restore_schedule()
 
         # -- Left: repeater list -----------------------------------------------
         list_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
@@ -267,7 +273,12 @@ class AdminView(Gtk.Box):
 
         # Console tab
         console_page = self._build_console_tab()
-        self._notebook.append_page(console_page, Gtk.Label(label="Console"))
+        self._console_page_num = self._notebook.append_page(
+            console_page, Gtk.Label(label="Console")
+        )
+
+        # Log tab: background logins, polls and traces [activity-log]
+        self._notebook.append_page(self._build_log_tab(), Gtk.Label(label="Log"))
 
         admin_outer.append(self._notebook)
         self._panel_stack.add_named(admin_outer, "admin")
@@ -427,6 +438,162 @@ class AdminView(Gtk.Box):
         self._set_cli_sensitive(False)
         return box
 
+    # --- [activity-log] Log tab --------------------------------------------------
+    _LOG_MAX_ROWS = 300
+
+    def _build_log_tab(self) -> Gtk.Widget:
+        scroll = Gtk.ScrolledWindow.new()
+        scroll.set_vexpand(True)
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self._log_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        self._log_box.add_css_class("cli-console")
+        self._log_box.add_css_class("activity-log")  # room on the right for the copy icon
+        scroll.set_child(self._log_box)
+
+        # Copy icon floats in the log's top-right corner
+        copy_btn = Gtk.Button.new_from_icon_name("edit-copy-symbolic")
+        copy_btn.add_css_class("flat")
+        copy_btn.add_css_class("activity-log-copy")
+        copy_btn.set_halign(Gtk.Align.END)
+        copy_btn.set_valign(Gtk.Align.START)
+        copy_btn.set_margin_top(4)
+        copy_btn.set_margin_end(4)
+        copy_btn.set_tooltip_text(
+            "Copy this repeater's log (tab-separated)\n"
+            "Logins, stats polls, traces and setting changes, newest first"
+        )
+        copy_btn.connect("clicked", self._on_log_copy)
+
+        overlay = Gtk.Overlay()
+        for side in ("start", "end", "top", "bottom"):
+            getattr(overlay, f"set_margin_{side}")(8)
+        overlay.set_child(scroll)
+        overlay.add_overlay(copy_btn)
+
+        # Entries arrive from worker threads too; render them on the main loop.
+        ACTIVITY.subscribe(lambda entry: GLib.idle_add(self._on_activity, entry))
+        self._render_log()
+        return overlay
+
+    def _log_filter(self) -> str:
+        """Key of the repeater whose entries the Log shows."""
+        sel = self._selected_repeater
+        return self._repeater_key(sel.display_name) if sel is not None else ""
+
+    def _activity(self, name: str, kind: str, text: str, ok: bool | None = None) -> None:
+        ACTIVITY.add(self._repeater_key(name), name, kind, text, ok)
+
+    @staticmethod
+    def _log_stamp(ts: float) -> str:
+        t = time.localtime(ts)
+        if time.strftime("%Y%m%d", t) == time.strftime("%Y%m%d"):
+            return time.strftime("%H:%M:%S", t)
+        return time.strftime("%b %d %H:%M:%S", t)
+
+    def _render_log(self) -> None:
+        clear_children(self._log_box)
+        entries = ACTIVITY.entries(self._log_filter())[-self._LOG_MAX_ROWS :]
+        self._log_empty = not entries
+        if not entries:
+            self._log_box.append(
+                self._make_console_label(
+                    "Nothing logged yet. Auto-login, stats polls and traces appear here.",
+                    "cli-response",
+                )
+            )
+            return
+        for entry in reversed(entries):
+            self._log_box.append(self._log_row(entry))
+
+    def _on_activity(self, entry: ActivityEntry) -> bool:
+        if entry.key != self._log_filter():
+            return False
+        if self._log_empty:
+            self._render_log()
+            return False
+        self._log_box.prepend(self._log_row(entry))
+        last = self._log_box.get_last_child()
+        n = 0
+        child = self._log_box.get_first_child()
+        while child is not None:
+            n += 1
+            child = child.get_next_sibling()
+        if n > self._LOG_MAX_ROWS and last is not None:
+            self._log_box.remove(last)
+        return False
+
+    def _log_row(self, entry: ActivityEntry) -> Gtk.Box:
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        css = {True: "cli-command", False: "cli-error"}.get(entry.ok, "cli-response")
+        stamp = Gtk.Label(label=self._log_stamp(entry.ts))
+        stamp.add_css_class("panel-muted")
+        stamp.set_valign(Gtk.Align.START)
+        row.append(stamp)
+        kind = Gtk.Label(label=entry.kind)
+        kind.add_css_class(css)
+        kind.set_width_chars(17)
+        kind.set_xalign(0.0)
+        kind.set_valign(Gtk.Align.START)
+        row.append(kind)
+        text = Gtk.Label(label=entry.text)
+        text.add_css_class(css)
+        text.set_xalign(0.0)
+        text.set_hexpand(True)
+        text.set_wrap(True)
+        text.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        text.set_selectable(True)
+        row.append(text)
+        return row
+
+    def _on_log_copy(self, _btn: Gtk.Button) -> None:
+        lines = [
+            "\t".join(
+                (
+                    time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(e.ts)),
+                    e.repeater,
+                    e.kind,
+                    e.text,
+                )
+            )
+            for e in reversed(ACTIVITY.entries(self._log_filter()))
+        ]
+        Gdk.Display.get_default().get_clipboard().set("\n".join(lines))
+
+    # --- [persist patch] repeater data survives restarts --------------------------
+    def _store(self):
+        return self._service.get_repeater_samples()
+
+    def _load_state(self, key: str, name: str):
+        try:
+            return self._store().get_state(key, name)
+        except Exception:  # noqa: BLE001 - a broken store must not break the view
+            logger.exception("could not load %s for %s", name, key)
+            return None
+
+    def _save_state(self, key: str, name: str, value) -> None:
+        try:
+            self._store().set_state(key, name, value)
+        except Exception:  # noqa: BLE001
+            logger.exception("could not save %s for %s", name, key)
+
+    def _restore_schedule(self) -> None:
+        """From the saved log: each repeater's last poll result, and when it was last
+        polled and auto-traced, so a restart keeps the schedule instead of polling
+        and tracing everything at once."""
+        for e in ACTIVITY.entries():
+            if e.kind in ("Poll", "Stats") and e.ok is not None:
+                self._last_poll[e.repeater] = e.ts
+                t = time.localtime(e.ts)
+                same_day = time.strftime("%Y%m%d", t) == time.strftime("%Y%m%d")
+                stamp = time.strftime("%H:%M" if same_day else "%b %d %H:%M", t)
+                if e.ok:
+                    self._poll_result[e.repeater] = f"Last poll {stamp}: {e.text}"
+                else:
+                    reason = e.text.removeprefix("Failed: ").split("; re-login")[0]
+                    self._poll_result[e.repeater] = f"Last poll {stamp} failed: {reason}"
+            elif e.kind == "Auto-trace" and e.ok is not None:
+                self._last_trace[e.key] = e.ts
+
     # -- Build status tab content ----------------------------------------------
 
     def _populate_status(self, peer: Peer) -> None:
@@ -462,6 +629,7 @@ class AdminView(Gtk.Box):
             if peer.location_updated:
                 loc_time = to_local(peer.location_updated).strftime("%b %d at %H:%M")
                 self._status_content.append(DetailRow("Updated:", loc_time))
+            self._add_mini_map(peer)
         else:
             no_loc = Gtk.Label(label="No location reported")
             no_loc.add_css_class("panel-muted")
@@ -603,9 +771,7 @@ class AdminView(Gtk.Box):
         trow.append(self._muted("Auto-trace"))
         trow.append(self._trace_interval_dropdown(peer))
         trow.append(self._muted("round trip, no login needed; see Graph \u203a Trace"))
-        tally = getattr(self, "_trace_retry_tally", {}).get(
-            self._repeater_key(peer.display_name)
-        )  # [trace-retry patch]
+        tally = self._retry_tally(self._repeater_key(peer.display_name))  # [trace-retry patch]
         if tally and tally[0]:
             trow.append(self._muted(f"\u00b7 retry recovered {tally[1]} of {tally[0]} failures"))
         for box in (row, trow):  # one line each: short labels, plenty of width
@@ -687,6 +853,15 @@ class AdminView(Gtk.Box):
                     if self._autologin_enabled(peer_name):  # [auto-login patch]
                         self._relogin_needed.add(peer_name)  # session may have lapsed
                 logger.info("repeater stats poll %s: %s", peer_name, self._poll_result[peer_name])
+                ok = bool(result.get("success"))
+                if ok:
+                    text = f"OK ({result.get('rtt_ms', 0)} ms)"
+                else:
+                    text = f"Failed: {result.get('reason', 'no response')}"
+                    if peer_name in self._relogin_needed:
+                        text += "; re-login scheduled"
+                kind = "Stats" if peer_name in self._stats_to_console else "Poll"
+                self._activity(peer_name, kind, text, ok=ok)
                 if peer_name in self._stats_to_console:  # [stats-button patch]
                     self._stats_to_console.discard(peer_name)
                     self._print_stats_to_console(peer_name, result)
@@ -803,6 +978,10 @@ class AdminView(Gtk.Box):
         seconds = self._POLL_CHOICES[dropdown.get_selected()][1]
         self._poll_intervals()[self._repeater_key(name)] = seconds
         logger.info("auto-poll for %s set to %ss", name, seconds)
+        label = self._POLL_CHOICES[dropdown.get_selected()][0]
+        self._activity(
+            name, "Setting", "Auto-poll off" if not seconds else f"Auto-poll every {label}"
+        )
         try:
             path = self._poll_file()
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -855,6 +1034,7 @@ class AdminView(Gtk.Box):
         else:
             keys.discard(self._repeater_key(name))
         logger.info("auto-login for %s: %s", name, check.get_active())
+        self._activity(name, "Setting", f"Auto-login {'on' if check.get_active() else 'off'}")
         try:
             path = self._autologin_file()
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -908,6 +1088,9 @@ class AdminView(Gtk.Box):
                     if not relogin:
                         self._last_poll.pop(name, None)  # first poll right away
                     msg = f"{what.capitalize()} to {name}: OK" + ("" if password else " (guest)")
+                    self._activity(
+                        name, what.capitalize(), "OK" + ("" if password else " (guest)"), ok=True
+                    )
                 else:
                     n = attempt + 1
                     self._autologin_attempts[name] = n
@@ -915,6 +1098,12 @@ class AdminView(Gtk.Box):
                     self._autologin_next[name] = time.time() + delay
                     when = f"{delay} s" if delay < 60 else f"{delay // 60} min"
                     msg = f"{what.capitalize()} to {name} failed ({result.get('reason', 'no response')}); retry in {when}"
+                    self._activity(
+                        name,
+                        what.capitalize(),
+                        f"Failed: {result.get('reason', 'no response')}; retry {n} in {when}",
+                        ok=False,
+                    )
                 logger.info(msg)
                 sel = self._selected_repeater
                 self._append_for(
@@ -1028,6 +1217,7 @@ class AdminView(Gtk.Box):
         copy_btn.set_tooltip_text("Copy all rows as text (tab-separated), to paste anywhere")
         copy_btn.connect("clicked", lambda b: _copy_text(b, "\n".join(lines)))
         box.append(copy_btn)
+        self._save_console("neighbors", text, {"command": command})  # [persist patch]
         self._console_box.append(box)
         self._scroll_console()
         return True
@@ -1140,6 +1330,10 @@ class AdminView(Gtk.Box):
         else:
             self._trace_intervals().pop(key, None)
         logger.info("auto-trace for %s set to %ss", name, seconds)
+        label = self._TRACE_CHOICES[dropdown.get_selected()][0]
+        self._activity(
+            name, "Setting", "Auto-trace off" if not seconds else f"Auto-trace every {label}"
+        )
         try:
             path = self._trace_file()
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -1152,9 +1346,7 @@ class AdminView(Gtk.Box):
         intervals = self._trace_intervals()
         if not intervals or getattr(self, "_trace_running", False):
             return False
-        last = getattr(self, "_last_trace", None)
-        if last is None:
-            last = self._last_trace = {}
+        last = self._last_trace
         for peer in self._service.list_peers():
             if not peer.is_repeater:
                 continue
@@ -1176,13 +1368,13 @@ class AdminView(Gtk.Box):
         inflight = getattr(self, "_trace_retry_inflight", None)
         if inflight is None:
             inflight = self._trace_retry_inflight = set()
-            self._trace_retry_tally = {}  # repeater key -> [failures retried, recovered]
         key = self._repeater_key(name)
         if name in inflight:  # this was the retry
             inflight.discard(name)
-            tally = self._trace_retry_tally.setdefault(key, [0, 0])
+            tally = self._retry_tally(key)
             if result.get("success"):
                 tally[1] += 1
+            self._save_state(key, "trace_retry", tally)
             logger.info(
                 "auto-trace retry %s: %s",
                 name,
@@ -1195,9 +1387,12 @@ class AdminView(Gtk.Box):
         went_on_air = "route" in result and not result.get("busy")
         if result.get("success") or not went_on_air:
             return
-        self._trace_retry_tally.setdefault(key, [0, 0])[0] += 1
+        tally = self._retry_tally(key)
+        tally[0] += 1
+        self._save_state(key, "trace_retry", tally)
         inflight.add(name)
         logger.info("auto-trace %s failed; retrying in %ss", name, self.TRACE_RETRY_S)
+        self._activity(name, "Auto-trace", f"Retrying in {self.TRACE_RETRY_S} s")
 
         def retry(tries_left: int = 6) -> bool:
             if name not in inflight:
@@ -1212,6 +1407,14 @@ class AdminView(Gtk.Box):
             return False
 
         GLib.timeout_add_seconds(self.TRACE_RETRY_S, retry)
+
+    def _retry_tally(self, key: str) -> list[int]:
+        """[failures retried, recovered by the retry] for one repeater, saved across restarts."""
+        tallies = self._trace_retry_tally
+        if key not in tallies:
+            saved = self._load_state(key, "trace_retry")
+            tallies[key] = list(saved) if isinstance(saved, list) and len(saved) == 2 else [0, 0]
+        return tallies[key]
 
     def _auto_trace(self, name: str) -> None:
         self._trace_running = True
@@ -1256,7 +1459,7 @@ class AdminView(Gtk.Box):
         self._trace_running = True
         btn.set_sensitive(False)
         btn.set_label("Tracing…")
-        self._notebook.set_current_page(self._notebook.get_n_pages() - 1)  # Console
+        self._notebook.set_current_page(self._console_page_num)
         self._append_console_command(f"trace {peer.display_name}")
         name = peer.display_name
 
@@ -1280,12 +1483,12 @@ class AdminView(Gtk.Box):
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _show_trace_result(self, name: str, result: dict) -> None:
+    def _trace_view(self, name: str, result: dict) -> Gtk.Widget:
         from meshcore_console.ui_gtk.widgets.trace_view import build_trace_view
 
         self_key = self._service.get_self_public_key() or ""
         self_label = f"{self._service.get_status().node_id} ({self_key[:2].upper() or 'me'})"
-        view = build_trace_view(
+        return build_trace_view(
             result,
             self._service.list_peers(),
             target=name,
@@ -1293,6 +1496,9 @@ class AdminView(Gtk.Box):
             spreading_factor=self._service.get_settings().spreading_factor,
             css_class="cli-response",
         )
+
+    def _show_trace_result(self, name: str, result: dict) -> None:
+        view = self._trace_view(name, result)
         logger.info("trace %s: %s", name, "ok" if result.get("success") else result.get("reason"))
         self._graph_page.refresh()  # [trace-log patch]
         cb = getattr(
@@ -1301,6 +1507,7 @@ class AdminView(Gtk.Box):
         if cb is not None:
             cb()
         with self._console_target(name):  # [console-history patch]
+            self._save_console("trace", "", {"name": name, "result": result})  # [persist patch]
             self._console_box.append(view)
             self._scroll_console()
 
@@ -1309,6 +1516,20 @@ class AdminView(Gtk.Box):
         if sel is not None and sel.display_name == peer_name:
             self._populate_status(sel)
             self._graph_page.refresh()
+
+    def _add_mini_map(self, peer: Peer) -> None:
+        """Map of the few miles around the repeater, under Location. One map is kept
+        and re-centred: Status is rebuilt on every advert, a new map would refetch tiles."""
+        if not MINI_MAP_AVAILABLE:
+            return
+        if getattr(self, "_mini_map", None) is None:
+            self._mini_map = MiniMap()
+            self._mini_map.set_margin_top(4)
+        parent = self._mini_map.get_parent()
+        if parent is not None:
+            parent.remove(self._mini_map)
+        self._mini_map.show_peer(peer)
+        self._status_content.append(self._mini_map)
 
     def _add_section_header(self, title: str) -> None:
         header = Gtk.Label(label=title)
@@ -1418,9 +1639,8 @@ class AdminView(Gtk.Box):
         else:
             lines.append("SNR: n/a")
         if path:
-            lines.append(
-                f"Route: {len(path)} hop{'s' if len(path) != 1 else ''} ({' \u2192 '.join(str(h).upper() for h in path)})"
-            )
+            hops = " \u2192 ".join(str(h).upper() for h in path)
+            lines.append(f"Route: {len(path)} hop{'s' if len(path) != 1 else ''} ({hops})")
         elif path == [] and peer.last_advert_time is not None:
             lines.append("Route: direct")
         try:
@@ -1466,6 +1686,7 @@ class AdminView(Gtk.Box):
         self._admin_title.set_text(peer.display_name)
         self._update_admin_path(peer)  # [admin-path patch]
         self._panel_stack.set_visible_child_name("admin")
+        self._render_log()  # [activity-log] this repeater's entries
 
         # Update login state UI
         state = self._service.get_repeater_login_state(peer.display_name)
@@ -1573,7 +1794,9 @@ class AdminView(Gtk.Box):
                     self._selected_repeater is not None
                     and self._selected_repeater.display_name == peer_name
                 )
+                who = "Login" + ("" if password else " (guest)")
                 if error:
+                    self._activity(peer_name, who, f"Failed: {error}", ok=False)
                     self._append_for(
                         peer_name, "error", f"Login failed: {error}"
                     )  # [console-history patch]
@@ -1583,6 +1806,7 @@ class AdminView(Gtk.Box):
                         self._update_login_ui(None)
                 elif not result.get("success"):
                     reason = result.get("reason", "Login failed")
+                    self._activity(peer_name, who, f"Failed: {reason}", ok=False)
                     self._append_for(peer_name, "error", reason)  # [console-history patch]
                     if still_selected:
                         self._login_btn.set_sensitive(True)
@@ -1593,6 +1817,7 @@ class AdminView(Gtk.Box):
                         state = self._service.get_repeater_login_state(peer_name)
                         self._update_login_ui(state)
                         self._populate_status(self._selected_repeater)
+                    self._activity(peer_name, who, "OK", ok=True)
                     self._append_for(
                         peer_name, "response", "Login successful"
                     )  # [console-history patch]
@@ -1620,6 +1845,7 @@ class AdminView(Gtk.Box):
             def done() -> bool:
                 self._busy = False
                 if error:
+                    self._activity(peer_name, "Logout", f"Failed: {error}", ok=False)
                     self._append_for(
                         peer_name, "error", f"Logout failed: {error}"
                     )  # [console-history patch]
@@ -1629,6 +1855,7 @@ class AdminView(Gtk.Box):
                     self._update_login_ui(None)
                     self._populate_status(self._selected_repeater)
                 self._append_for(peer_name, "response", "Logged out")  # [console-history patch]
+                self._activity(peer_name, "Logout", "OK; auto-login paused until restart", ok=True)
                 self._autologin_suppressed.add(peer_name)  # [auto-login patch]
                 self._refresh_list()
                 return False
@@ -1704,6 +1931,7 @@ class AdminView(Gtk.Box):
             return
         if not self._record_power(peer_name, reply.get("response_text") or ""):
             skip.add(peer_name)
+            self._activity(peer_name, "Power", "No 'power' command; not asking again this session")
             logger.info(
                 "%s: no 'power' command (%r); not asking again this session",
                 peer_name,
@@ -1960,6 +2188,10 @@ class AdminView(Gtk.Box):
         if len(self._command_history) > _MAX_HISTORY:
             self._command_history = self._command_history[-_MAX_HISTORY:]
         self._history_index = -1
+        key = getattr(self, "_console_current_key", None)
+        if key:  # [persist patch]
+            self._console_entry(key)["history"] = self._command_history
+            self._save_state(key, "cmd_history", self._command_history)
 
         self._cmd_entry.set_text("")
         self._append_console_command(command)
@@ -2030,8 +2262,65 @@ class AdminView(Gtk.Box):
         if entry is None:
             box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
             box.add_css_class("cli-console")
-            entry = consoles[key] = {"box": box, "history": [], "follow": True, "value": 0.0}
+            saved = self._load_state(key, "cmd_history")  # [persist patch]
+            history = [str(c) for c in saved][-_MAX_HISTORY:] if isinstance(saved, list) else []
+            entry = consoles[key] = {"box": box, "history": history, "follow": True, "value": 0.0}
+            self._replay_console(key, box)
         return entry
+
+    def _replay_console(self, key: str, box: Gtk.Box) -> None:
+        """[persist patch] Rebuild a repeater's console from the saved rows."""
+        try:
+            rows = self._store().console_rows(key, self._CONSOLE_MAX_LINES)
+        except Exception:  # noqa: BLE001
+            logger.exception("could not load the console of %s", key)
+            return
+        if not rows:
+            return
+        prev = (self._console_box, getattr(self, "_console_offscreen", False))
+        prev_key = getattr(self, "_console_box_key", None)
+        self._console_box, self._console_offscreen, self._console_box_key = box, True, key
+        self._console_replaying = True
+        try:
+            for row in rows:
+                kind, text, data = row["kind"], row["text"], row["data"] or {}
+                if kind == "command":
+                    self._append_console_command(text)
+                elif kind == "neighbors":
+                    if not self._append_neighbors_table(data.get("command", "neighbors"), text):
+                        self._append_console_response(text)
+                elif kind == "trace":
+                    box.append(self._trace_view(data.get("name", ""), data.get("result", {})))
+                else:
+                    (
+                        self._append_console_error
+                        if kind == "error"
+                        else self._append_console_response
+                    )(text)
+            t = time.localtime(rows[-1]["ts"])
+            self._append_console_lines(
+                time.strftime(
+                    "\u2500\u2500 saved console, last output %b %d %H:%M \u2500\u2500", t
+                ),
+                "panel-muted",
+            )
+        except Exception:  # noqa: BLE001 - one bad row must not lose the console
+            logger.exception("could not replay the console of %s", key)
+        finally:
+            self._console_replaying = False
+            self._console_box, self._console_offscreen = prev
+            self._console_box_key = prev_key
+
+    def _save_console(self, kind: str, text: str, data: dict | None = None) -> None:
+        if getattr(self, "_console_replaying", False):
+            return
+        key = getattr(self, "_console_box_key", None)
+        if not key:
+            return
+        try:
+            self._store().add_console(key, kind, text, data)
+        except Exception:  # noqa: BLE001
+            logger.exception("could not save console output")
 
     def _switch_console(self, peer: Peer) -> None:
         key = self._repeater_key(peer.display_name)
@@ -2051,6 +2340,7 @@ class AdminView(Gtk.Box):
         self._console_scroll.set_child(entry["box"])
         self._console_box = entry["box"]
         self._console_current_key = key
+        self._console_box_key = key  # [persist patch]
         self._command_history = entry["history"]
         self._history_index = -1
         if entry["follow"]:
@@ -2067,15 +2357,18 @@ class AdminView(Gtk.Box):
         class _Target:
             def __enter__(self_):
                 self_.prev = (view._console_box, getattr(view, "_console_offscreen", False))
+                self_.prev_key = getattr(view, "_console_box_key", None)
                 key = view._repeater_key(peer_name)
                 if key != getattr(view, "_console_current_key", None):
                     view._console_box = view._console_entry(key)["box"]
                     view._console_offscreen = True
+                view._console_box_key = key  # [persist patch]
                 return view._console_box
 
             def __exit__(self_, *_exc):
                 view._trim_console(view._console_box)
                 view._console_box, view._console_offscreen = self_.prev
+                view._console_box_key = self_.prev_key
                 return False
 
         return _Target()
@@ -2100,6 +2393,7 @@ class AdminView(Gtk.Box):
             n -= 1
 
     def _append_console_command(self, text: str) -> None:
+        self._save_console("command", text)  # [persist patch]
         self._console_box.append(self._make_console_label(f"> {text}", "cli-command"))
         self._scroll_console()
 
@@ -2113,6 +2407,8 @@ class AdminView(Gtk.Box):
         # [console-lines patch] One label per line: GTK under-measured the height
         # of a single wrapping multi-line label here, so the scroll range ended
         # early and the last lines of e.g. the stats reply were clipped.
+        if css_class in ("cli-response", "cli-error"):  # [persist patch]
+            self._save_console("error" if css_class == "cli-error" else "response", text)
         for line in text.split("\n") or [""]:
             self._console_box.append(self._make_console_label(line or " ", css_class))
         self._scroll_console()
@@ -2350,13 +2646,13 @@ class AdminView(Gtk.Box):
         self._admin_title.set_visible(False)
 
     def page_switcher(self) -> Gtk.Widget:  # [repeater-tabs patch]
-        """Status / Graph / Console buttons for the panel title row (the tabs are hidden)."""
+        """Status / Graph / Console / Log buttons for the panel title row (the tabs are hidden)."""
         self._notebook.set_show_tabs(False)
         self._notebook.set_show_border(False)
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         box.add_css_class("linked")
         self._tab_btns = []
-        for i, name in enumerate(("Status", "Graph", "Console")):
+        for i, name in enumerate(("Status", "Graph", "Console", "Log")):
             btn = Gtk.ToggleButton(label=name)
             if self._tab_btns:
                 btn.set_group(self._tab_btns[0])
