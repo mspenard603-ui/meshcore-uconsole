@@ -38,8 +38,12 @@ def capitalize_first(text: str) -> str:  # [capitalize patch]
         i = j + 1
         while i < len(text) and text[i] == " ":
             i += 1
-    if i < len(text) and text[i].islower() and not text.startswith(("http://", "https://", "www."), i):
-        return text[:i] + text[i].upper() + text[i + 1:]
+    if (
+        i < len(text)
+        and text[i].islower()
+        and not text.startswith(("http://", "https://", "www."), i)
+    ):
+        return text[:i] + text[i].upper() + text[i + 1 :]
     return text
 
 

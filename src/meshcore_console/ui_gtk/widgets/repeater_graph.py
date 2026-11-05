@@ -29,7 +29,13 @@ gi.require_version("Gtk", "4.0")
 
 from gi.repository import GLib, Gtk
 
-RANGES = (("1 h", 3600), ("6 h", 6 * 3600), ("24 h", 86400), ("7 d", 7 * 86400), ("30 d", 30 * 86400))
+RANGES = (
+    ("1 h", 3600),
+    ("6 h", 6 * 3600),
+    ("24 h", 86400),
+    ("7 d", 7 * 86400),
+    ("30 d", 30 * 86400),
+)
 
 # Colours: app dark theme (tokens.css) + categorical slots 1-2 validated on it.
 TEXT = (0.906, 0.933, 0.973)  # mc_text #e7eef8
@@ -62,8 +68,19 @@ def _nice_step(span: float, target: int = 4) -> float:
 
 
 def _time_step(span_s: float) -> float:
-    for step in (900, 1800, 3600, 2 * 3600, 3 * 3600, 6 * 3600, 12 * 3600, 86400, 2 * 86400,
-                 4 * 86400, 7 * 86400):
+    for step in (
+        900,
+        1800,
+        3600,
+        2 * 3600,
+        3 * 3600,
+        6 * 3600,
+        12 * 3600,
+        86400,
+        2 * 86400,
+        4 * 86400,
+        7 * 86400,
+    ):
         if span_s / step <= 6:
             return step
     return 14 * 86400
@@ -74,8 +91,16 @@ def _fmt_time(ts: float, span_s: float) -> str:
     return dt.strftime("%H:%M") if span_s <= 2 * 86400 else dt.strftime("%b %-d")
 
 
-def _text(cr, x: float, y: float, s: str, rgb=MUTED, align: str = "left", size: float = FONT,
-          bold: bool = False) -> float:
+def _text(
+    cr,
+    x: float,
+    y: float,
+    s: str,
+    rgb=MUTED,
+    align: str = "left",
+    size: float = FONT,
+    bold: bool = False,
+) -> float:
     cr.select_font_face("Sans", 0, 1 if bold else 0)
     cr.set_font_size(size)
     ext = cr.text_extents(s)
@@ -139,11 +164,23 @@ def draw_graph(cr, width: int, height: int, data: dict, hover_x: float | None = 
     _text(cr, lx + 22, 18, "Noise floor", TEXT)
 
     if not data["heard"] and not data["stats"]:
-        _text(cr, PAD_L + plot_w / 2, PAD_T + panel_h, "No samples in this time range yet", MUTED,
-              align="center", size=13)
-        _text(cr, PAD_L + plot_w / 2, PAD_T + panel_h + 20,
-              "Signal is logged whenever this radio hears the repeater; stats when polled.",
-              MUTED, align="center")
+        _text(
+            cr,
+            PAD_L + plot_w / 2,
+            PAD_T + panel_h,
+            "No samples in this time range yet",
+            MUTED,
+            align="center",
+            size=13,
+        )
+        _text(
+            cr,
+            PAD_L + plot_w / 2,
+            PAD_T + panel_h + 20,
+            "Signal is logged whenever this radio hears the repeater; stats when polled.",
+            MUTED,
+            align="center",
+        )
         return
 
     panels = (
@@ -296,7 +333,10 @@ def draw_graph(cr, width: int, height: int, data: dict, hover_x: float | None = 
 # -- Trace mode [trace-log patch] ------------------------------------------------
 OUTBOUND = HEARD  # blue: away from this radio
 RETURN = REPORTED  # orange: back toward this radio
-TRACE_SERIES = (("out", "Outbound (away from you)", OUTBOUND), ("ret", "Return (toward you)", RETURN))
+TRACE_SERIES = (
+    ("out", "Outbound (away from you)", OUTBOUND),
+    ("ret", "Return (toward you)", RETURN),
+)
 SNR_LIMIT_DB = {5: -2.5, 6: -5.0, 7: -7.5, 8: -10.0, 9: -12.5, 10: -15.0, 11: -17.5, 12: -20.0}
 MAX_TRACE_PANELS = 16  # [trace-scroll patch] more links: the graph scrolls
 MIN_TRACE_PANEL_H = 70  # px per link panel before the graph grows and scrolls
@@ -357,7 +397,8 @@ def _bucket(points: list[tuple[float, float]], bucket: float) -> list[tuple[floa
     for t, v in points:
         groups.setdefault(int(t // bucket), []).append((t, v))
     return [
-        (sum(t for t, _ in g) / len(g), sum(v for _, v in g) / len(g)) for _k, g in sorted(groups.items())
+        (sum(t for t, _ in g) / len(g), sum(v for _, v in g) / len(g))
+        for _k, g in sorted(groups.items())
     ]
 
 
@@ -367,8 +408,14 @@ def trace_graph_height(n_links: int) -> int:  # [trace-scroll patch]
     return int(PAD_T + PAD_B + FAIL_STRIP + n * MIN_TRACE_PANEL_H + (n - 1) * TRACE_PANEL_GAP)
 
 
-def draw_trace_graph(cr, width: int, height: int, data: dict, hover_x: float | None = None,
-                     hover_y: float | None = None) -> None:
+def draw_trace_graph(
+    cr,
+    width: int,
+    height: int,
+    data: dict,
+    hover_x: float | None = None,
+    hover_y: float | None = None,
+) -> None:
     """*data*: {"t0","t1","links": trace_links(...), "fails": [t...], "limit": dB, "sf": n,
     "names": callable(hop)->str, "gap": s}."""
     t0, t1 = data["t0"], data["t1"]
@@ -406,12 +453,32 @@ def draw_trace_graph(cr, width: int, height: int, data: dict, hover_x: float | N
 
     if not links:
         mid = PAD_T + (height - PAD_T - PAD_B) / 2
-        _text(cr, PAD_L + plot_w / 2, mid, "No traces in this time range yet", MUTED, align="center", size=13)
-        _text(cr, PAD_L + plot_w / 2, mid + 20,
-              "Press Trace, or set Auto-trace on the Status tab.", MUTED, align="center")
+        _text(
+            cr,
+            PAD_L + plot_w / 2,
+            mid,
+            "No traces in this time range yet",
+            MUTED,
+            align="center",
+            size=13,
+        )
+        _text(
+            cr,
+            PAD_L + plot_w / 2,
+            mid + 20,
+            "Press Trace, or set Auto-trace on the Status tab.",
+            MUTED,
+            align="center",
+        )
         if data["fails"]:
-            _text(cr, PAD_L + plot_w / 2, mid + 40,
-                  f"{len(data['fails'])} trace(s) in this range failed.", MUTED, align="center")
+            _text(
+                cr,
+                PAD_L + plot_w / 2,
+                mid + 40,
+                f"{len(data['fails'])} trace(s) in this range failed.",
+                MUTED,
+                align="center",
+            )
         return
 
     gap_between = TRACE_PANEL_GAP
@@ -496,8 +563,13 @@ def draw_trace_graph(cr, width: int, height: int, data: dict, hover_x: float | N
                     cr.arc(X(t), Y(val), 5, 0, 2 * math.pi)
                     cr.stroke()
                     a, b = (link["a"], link["b"]) if key == "out" else (link["b"], link["a"])
-                    readout.append((rgb, f"{val:+.2f} dB  {_short(a)} \u2192 {_short(b)}  "
-                                         f"({val - limit:+.1f} margin)"))
+                    readout.append(
+                        (
+                            rgb,
+                            f"{val:+.2f} dB  {_short(a)} \u2192 {_short(b)}  "
+                            f"({val - limit:+.1f} margin)",
+                        )
+                    )
 
     # Failure strip + time axis
     strip_y = PAD_T + len(links) * panel_h + (len(links) - 1) * gap_between + 4
@@ -510,7 +582,14 @@ def draw_trace_graph(cr, width: int, height: int, data: dict, hover_x: float | N
     for t in data["fails"]:
         _text(cr, X(t), strip_y + 10, "×", MUTED, align="center", bold=True)
     if hidden > 0:
-        _text(cr, PAD_L + plot_w, strip_y + 10, f"+{hidden} more link(s) not shown", MUTED, align="right")
+        _text(
+            cr,
+            PAD_L + plot_w,
+            strip_y + 10,
+            f"+{hidden} more link(s) not shown",
+            MUTED,
+            align="right",
+        )
     tstep = _time_step(span)
     tz_off = datetime.fromtimestamp(t0).astimezone().utcoffset().total_seconds()
     t = math.ceil((t0 + tz_off) / tstep) * tstep - tz_off
@@ -543,7 +622,9 @@ def _crosshair(cr, width, hover_x, hover_t, top, bottom, readout, hover_y=None) 
     bw, bh = w + 30, 16 * len(lines) + 10
     bx = hover_x + 12 if hover_x + 12 + bw < width else hover_x - 12 - bw
     by = top + 4
-    if hover_y is not None:  # [trace-scroll patch] next to the pointer: the top may be scrolled away
+    if (
+        hover_y is not None
+    ):  # [trace-scroll patch] next to the pointer: the top may be scrolled away
         by = max(top + 4, min(hover_y + 12, bottom - bh))
     cr.set_source_rgba(*SURFACE, 0.96)
     cr.rectangle(bx, by, bw, bh)
@@ -569,16 +650,27 @@ def _crosshair(cr, width, hover_x, hover_t, top, bottom, readout, hover_y=None) 
 ERR_RX = (0.898, 0.282, 0.302)  # #e5484d red: radio RX errors
 ERR_EV = (0.937, 0.725, 0.247)  # #efb93f amber, dashed: firmware error events
 PACKET_FIELDS = {
-    "rx": "n_packets_recv", "tx": "n_packets_sent",
-    "rx_flood": "n_recv_flood", "rx_direct": "n_recv_direct",
-    "tx_flood": "n_sent_flood", "tx_direct": "n_sent_direct",
-    "dups_flood": "n_flood_dups", "dups_direct": "n_direct_dups",
-    "rx_err": "n_recv_errors", "err_ev": "err_events",
+    "rx": "n_packets_recv",
+    "tx": "n_packets_sent",
+    "rx_flood": "n_recv_flood",
+    "rx_direct": "n_recv_direct",
+    "tx_flood": "n_sent_flood",
+    "tx_direct": "n_sent_direct",
+    "dups_flood": "n_flood_dups",
+    "dups_direct": "n_direct_dups",
+    "rx_err": "n_recv_errors",
+    "err_ev": "err_events",
 }
 PACKET_PANELS = (
     ("Packets per hour", (("rx", "RX", HEARD, False), ("tx", "TX", REPORTED, False)), 10.0),
-    ("Errors per hour", (("rx_err", "RX errors (CRC/header)", ERR_RX, False),
-                         ("err_ev", "Error events", ERR_EV, True)), 2.0),
+    (
+        "Errors per hour",
+        (
+            ("rx_err", "RX errors (CRC/header)", ERR_RX, False),
+            ("err_ev", "Error events", ERR_EV, True),
+        ),
+        2.0,
+    ),
 )
 
 
@@ -621,7 +713,9 @@ def _fmt_rate(v: float | None) -> str:
     return f"{v:.0f}/h" if v >= 10 else f"{v:.1f}/h"
 
 
-def draw_packet_graph(cr, width: int, height: int, data: dict, hover_x: float | None = None) -> None:
+def draw_packet_graph(
+    cr, width: int, height: int, data: dict, hover_x: float | None = None
+) -> None:
     """*data*: {"t0","t1","points","reboots","latest": stats row or None,"gap": s,"interval": s}."""
     t0, t1 = data["t0"], data["t1"]
     span = t1 - t0
@@ -637,11 +731,24 @@ def draw_packet_graph(cr, width: int, height: int, data: dict, hover_x: float | 
     latest = data.get("latest") or {}
     if not points:
         mid = PAD_T + panel_h
-        _text(cr, PAD_L + plot_w / 2, mid, "No packet rates in this time range yet", MUTED,
-              align="center", size=13)
-        _text(cr, PAD_L + plot_w / 2, mid + 20,
-              f"Rates need two stats polls in a row (polled every {data['interval'] // 60:.0f} min "
-              "while logged in).", MUTED, align="center")
+        _text(
+            cr,
+            PAD_L + plot_w / 2,
+            mid,
+            "No packet rates in this time range yet",
+            MUTED,
+            align="center",
+            size=13,
+        )
+        _text(
+            cr,
+            PAD_L + plot_w / 2,
+            mid + 20,
+            f"Rates need two stats polls in a row (polled every {data['interval'] // 60:.0f} min "
+            "while logged in).",
+            MUTED,
+            align="center",
+        )
         return
 
     hover_t = None
@@ -679,8 +786,10 @@ def draw_packet_graph(cr, width: int, height: int, data: dict, hover_x: float | 
             if idx == 0:
                 tot = f"since boot: {latest.get('n_packets_recv', 0):,} RX · {latest.get('n_packets_sent', 0):,} TX"
             else:
-                tot = (f"since boot: {latest.get('n_recv_errors', 'n/a')} RX err · "
-                       f"{latest.get('err_events', 'n/a')} events")
+                tot = (
+                    f"since boot: {latest.get('n_recv_errors', 'n/a')} RX err · "
+                    f"{latest.get('err_events', 'n/a')} events"
+                )
             _text(cr, PAD_L + plot_w, top - 6, tot, MUTED, align="right")
 
         v = lo
@@ -751,13 +860,21 @@ def draw_packet_graph(cr, width: int, height: int, data: dict, hover_x: float | 
             b = best
 
             def split(a: str, c: str) -> str:
-                return f" (flood {_fmt_rate(b[a])} · direct {_fmt_rate(b[c])})" if b[a] is not None else ""
+                return (
+                    f" (flood {_fmt_rate(b[a])} · direct {_fmt_rate(b[c])})"
+                    if b[a] is not None
+                    else ""
+                )
 
             readout = [
                 (HEARD, f"RX {_fmt_rate(b['rx'])}" + split("rx_flood", "rx_direct")),
                 (REPORTED, f"TX {_fmt_rate(b['tx'])}" + split("tx_flood", "tx_direct")),
-                (MUTED, f"Duplicates {_fmt_rate((b['dups_flood'] or 0) + (b['dups_direct'] or 0))}"
-                 if b["dups_flood"] is not None else "Duplicates n/a"),
+                (
+                    MUTED,
+                    f"Duplicates {_fmt_rate((b['dups_flood'] or 0) + (b['dups_direct'] or 0))}"
+                    if b["dups_flood"] is not None
+                    else "Duplicates n/a",
+                ),
                 (ERR_RX, f"RX errors {_fmt_rate(b['rx_err'])}"),
                 (ERR_EV, f"Error events {_fmt_rate(b['err_ev'])}"),
             ]
@@ -772,15 +889,20 @@ BATT = (0.290, 0.784, 0.478)  # #4ac87a green
 
 # Power source strip [power-source patch]
 POWER_COLORS = {
-    "usb": HEARD,                      # blue
-    "dc": REPORTED,                    # orange
-    "solar": (0.937, 0.725, 0.247),    # amber
-    "battery": BATT,                   # green
+    "usb": HEARD,  # blue
+    "dc": REPORTED,  # orange
+    "solar": (0.937, 0.725, 0.247),  # amber
+    "battery": BATT,  # green
     "unknown": MUTED,
 }
 POWER_LABELS = {"usb": "USB", "dc": "DC", "solar": "Solar", "battery": "Battery", "unknown": "?"}
-POWER_SOURCES_TEXT = {"usb": "On USB power", "dc": "On external DC power", "solar": "Solar charging",
-                      "battery": "On battery", "unknown": "Source not detectable"}
+POWER_SOURCES_TEXT = {
+    "usb": "On USB power",
+    "dc": "On external DC power",
+    "solar": "Solar charging",
+    "battery": "On battery",
+    "unknown": "Source not detectable",
+}
 STRIP_H = 18
 
 
@@ -838,7 +960,9 @@ def draw_power_icon(cr, src: str, x: float, y: float, rgb=None) -> float:
     return w
 
 
-def _power_runs(power: list[dict], t0: float, t1: float, gap: float) -> list[tuple[float, float, str]]:
+def _power_runs(
+    power: list[dict], t0: float, t1: float, gap: float
+) -> list[tuple[float, float, str]]:
     """(start, end, src) runs; a reading holds until the next one, at most *gap* seconds."""
     runs: list[tuple[float, float, str]] = []
     for i, p in enumerate(power):
@@ -866,7 +990,9 @@ def power_at(power: list[dict], t: float, gap: float) -> str | None:
     return found["src"]
 
 
-def draw_battery_graph(cr, width: int, height: int, data: dict, hover_x: float | None = None) -> None:
+def draw_battery_graph(
+    cr, width: int, height: int, data: dict, hover_x: float | None = None
+) -> None:
     """*data*: {"t0","t1","points": battery_series rows,"latest_mv","gap","interval"}."""
     t0, t1 = data["t0"], data["t1"]
     span = t1 - t0
@@ -898,11 +1024,23 @@ def draw_battery_graph(cr, width: int, height: int, data: dict, hover_x: float |
 
     points = [p for p in data["points"] if p.get("mv")]
     if not points:
-        _text(cr, PAD_L + plot_w / 2, (top + bottom) / 2, "No battery readings in this time range yet",
-              MUTED, align="center", size=13)
-        _text(cr, PAD_L + plot_w / 2, (top + bottom) / 2 + 20,
-              f"Voltage comes from stats polls (every {data['interval'] // 60:.0f} min while logged in).",
-              MUTED, align="center")
+        _text(
+            cr,
+            PAD_L + plot_w / 2,
+            (top + bottom) / 2,
+            "No battery readings in this time range yet",
+            MUTED,
+            align="center",
+            size=13,
+        )
+        _text(
+            cr,
+            PAD_L + plot_w / 2,
+            (top + bottom) / 2 + 20,
+            f"Voltage comes from stats polls (every {data['interval'] // 60:.0f} min while logged in).",
+            MUTED,
+            align="center",
+        )
         return
 
     vals = [p["mv_min"] / 1000 for p in points] + [p["mv_max"] / 1000 for p in points]
@@ -923,12 +1061,18 @@ def draw_battery_graph(cr, width: int, height: int, data: dict, hover_x: float |
     cr.rectangle(lx, title_y - 9, 16, 10)
     cr.fill()
     lx += 22 + _text(cr, lx + 22, title_y, "min\u2013max", TEXT) + 18
-    for src in [s for s in POWER_LABELS if any(p["src"] == s for p in power)]:  # [power-source patch]
+    for src in [
+        s for s in POWER_LABELS if any(p["src"] == s for p in power)
+    ]:  # [power-source patch]
         lx += draw_power_icon(cr, src, lx, title_y - 4) + 5
         lx += _text(cr, lx, title_y, POWER_LABELS[src], TEXT) + 12
     right = []
     if power:
-        right.append(POWER_LABELS.get(power[-1]["src"], "?") if power[-1]["src"] != "unknown" else "source n/a")
+        right.append(
+            POWER_LABELS.get(power[-1]["src"], "?")
+            if power[-1]["src"] != "unknown"
+            else "source n/a"
+        )
     if data.get("latest_mv"):
         right.append(f"latest {data['latest_mv'] / 1000:.3f} V")
     if right:
@@ -994,8 +1138,13 @@ def draw_battery_graph(cr, width: int, height: int, data: dict, hover_x: float |
             cr.stroke()
             readout = [(BATT, f"{best['mv'] / 1000:.3f} V")]
             if best["n"] > 1:
-                readout.append(((), f"{best['mv_min'] / 1000:.3f}\u2013{best['mv_max'] / 1000:.3f} V, "
-                                    f"{best['n']} polls"))
+                readout.append(
+                    (
+                        (),
+                        f"{best['mv_min'] / 1000:.3f}\u2013{best['mv_max'] / 1000:.3f} V, "
+                        f"{best['n']} polls",
+                    )
+                )
         if power:  # [power-source patch]
             src = power_at(power, hover_t, data.get("power_gap", 3 * 3600))
             if src is not None:
@@ -1011,7 +1160,9 @@ NB_SERIES = (
 )
 
 
-def draw_neighbour_graph(cr, width: int, height: int, data: dict, hover_x: float | None = None) -> None:
+def draw_neighbour_graph(
+    cr, width: int, height: int, data: dict, hover_x: float | None = None
+) -> None:
     """*data*: {"t0","t1","points": neighbour_series rows,"gap","interval"}."""
     t0, t1 = data["t0"], data["t1"]
     span = t1 - t0
@@ -1025,11 +1176,23 @@ def draw_neighbour_graph(cr, width: int, height: int, data: dict, hover_x: float
 
     points = data["points"]
     if not points:
-        _text(cr, PAD_L + plot_w / 2, (top + bottom) / 2, "No neighbour counts in this time range yet",
-              MUTED, align="center", size=13)
-        _text(cr, PAD_L + plot_w / 2, (top + bottom) / 2 + 20,
-              f"Counted with each stats poll (every {data['interval'] // 60:.0f} min while logged in).",
-              MUTED, align="center")
+        _text(
+            cr,
+            PAD_L + plot_w / 2,
+            (top + bottom) / 2,
+            "No neighbour counts in this time range yet",
+            MUTED,
+            align="center",
+            size=13,
+        )
+        _text(
+            cr,
+            PAD_L + plot_w / 2,
+            (top + bottom) / 2 + 20,
+            f"Counted with each stats poll (every {data['interval'] // 60:.0f} min while logged in).",
+            MUTED,
+            align="center",
+        )
         return
 
     vals = [p[k] for k, *_ in NB_SERIES for p in points if p.get(k) is not None]
@@ -1051,9 +1214,15 @@ def draw_neighbour_graph(cr, width: int, height: int, data: dict, hover_x: float
         cr.set_dash([])
         lx += 22 + _text(cr, lx + 22, top - 6, label, TEXT) + 14
     last = points[-1]
-    _text(cr, PAD_L + plot_w, top - 6,
-          f"latest: {last.get('h1', 0)} in 1 h \u00b7 {last.get('h24', 0)} in 24 h \u00b7 "
-          f"{last.get('total', 0)} in table", MUTED, align="right")
+    _text(
+        cr,
+        PAD_L + plot_w,
+        top - 6,
+        f"latest: {last.get('h1', 0)} in 1 h \u00b7 {last.get('h24', 0)} in 24 h \u00b7 "
+        f"{last.get('total', 0)} in table",
+        MUTED,
+        align="right",
+    )
 
     v = 0.0
     cr.set_line_width(1)
@@ -1134,7 +1303,11 @@ class RepeaterGraphPage(Gtk.Box):
             ("Trace", "trace", "SNR of every link from logged round-trip traces"),
             ("Packets", "packets", "RX/TX packets and errors per hour, from polled repeater stats"),
             ("Battery", "battery", "Battery voltage from polled repeater stats"),
-            ("Neighbours", "neighbours", "Neighbours heard by the repeater, counted with each poll"),
+            (
+                "Neighbours",
+                "neighbours",
+                "Neighbours heard by the repeater, counted with each poll",
+            ),
         ):
             btn = Gtk.ToggleButton(label=label)
             btn.add_css_class("quick-cmd-btn")
@@ -1289,7 +1462,9 @@ class RepeaterGraphPage(Gtk.Box):
         rates["reboots"] = [t for t in rates["reboots"] if t >= t0]
         polls = sum(1 for r in rows if r["t"] >= t0)
         boots = len(rates["reboots"])
-        self._info.set_text(f"{polls} polls" + (f" · {boots} reboot{'s' if boots != 1 else ''}" if boots else ""))
+        self._info.set_text(
+            f"{polls} polls" + (f" · {boots} reboot{'s' if boots != 1 else ''}" if boots else "")
+        )
         return {
             "mode": "packets",
             "t0": t0,
@@ -1307,8 +1482,12 @@ class RepeaterGraphPage(Gtk.Box):
         store = self._service.get_repeater_samples()
         t1 = time.time()
         t0 = t1 - self._range_s
-        points = store.neighbour_series(self._pubkey, t0) if hasattr(store, "neighbour_series") else []
-        self._info.set_text(f"{len(points)} poll{'s' if len(points) != 1 else ''}" if points else "")
+        points = (
+            store.neighbour_series(self._pubkey, t0) if hasattr(store, "neighbour_series") else []
+        )
+        self._info.set_text(
+            f"{len(points)} poll{'s' if len(points) != 1 else ''}" if points else ""
+        )
         gaps = sorted(b["t"] - a["t"] for a, b in zip(points, points[1:]))
         interval = gaps[len(gaps) // 2] if gaps else POLL_INTERVAL_S
         return {
@@ -1327,7 +1506,11 @@ class RepeaterGraphPage(Gtk.Box):
         t1 = time.time()
         t0 = t1 - self._range_s
         bucket = max(float(POLL_INTERVAL_S), self._range_s / 240)
-        points = store.battery_series(self._pubkey, t0, bucket) if hasattr(store, "battery_series") else []
+        points = (
+            store.battery_series(self._pubkey, t0, bucket)
+            if hasattr(store, "battery_series")
+            else []
+        )
         latest = store.latest(self._pubkey, "stats") if hasattr(store, "latest") else None
         polls = sum(p["n"] for p in points)
         self._info.set_text(f"{polls} poll{'s' if polls != 1 else ''}" if polls else "")

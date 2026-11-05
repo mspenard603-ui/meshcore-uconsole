@@ -33,7 +33,9 @@ def _reply_css() -> None:  # [channel-reply patch] small, quiet arrow; full stre
         b".message-reply-btn { min-width: 28px; min-height: 28px; padding: 0 4px; font-size: 20px; color: #aab9cd; }"
         b".message-reply-btn:hover { color: #e7eef8; }"
     )
-    Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+    Gtk.StyleContext.add_provider_for_display(
+        Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+    )
     _REPLY_CSS["done"] = True
 
 

@@ -393,7 +393,9 @@ class MessagesView(Gtk.Box):
             if channel.channel_id != "public":
                 gesture = Gtk.GestureClick.new()
                 gesture.set_button(Gdk.BUTTON_SECONDARY)
-                gesture.connect("pressed", self._on_channel_right_click)  # [leak-fix patch] no row ref
+                gesture.connect(
+                    "pressed", self._on_channel_right_click
+                )  # [leak-fix patch] no row ref
                 row.add_controller(gesture)
 
             self._channel_list.append(row)
@@ -418,14 +420,6 @@ class MessagesView(Gtk.Box):
         self._details_revealer.set_reveal_child(False)
         self._selected_message = None
 
-        # Capture unread count before it gets reset
-        channels = self._service.list_channels()
-        unread_count = 0
-        for ch in channels:
-            if ch.channel_id == self._selected_channel_id:
-                unread_count = ch.unread_count
-                break
-
         messages = self._service.list_messages_for_channel(self._selected_channel_id, limit=100)
         self._last_message_count = len(messages)
         self._last_message_id = messages[-1].message_id if messages else None  # [chat-100 patch]
@@ -435,23 +429,20 @@ class MessagesView(Gtk.Box):
             self._message_box.append(EmptyState("No messages in this channel yet.", vexpand=True))
             return
 
-        first_unread_widget: Gtk.Widget | None = None
-        first_unread_idx = len(messages) - unread_count if 0 < unread_count < len(messages) else -1
-
         today = GLib.DateTime.new_now_local().format("%Y-%m-%d")
         prev_date: str | None = None
-        for idx, message in enumerate(messages):
+        for message in messages:
             msg_date = to_local(message.created_at).strftime("%Y-%m-%d")
             if msg_date != prev_date and not (prev_date is None and msg_date == today):
                 self._message_box.append(DaySeparator(msg_date))
             prev_date = msg_date
             bubble = MessageBubble(message, self._service, self._on_message_clicked)
             self._message_box.append(bubble)
-            if idx == first_unread_idx:
-                first_unread_widget = bubble
         self._last_message_date = prev_date
 
-        GLib.idle_add(self._scroll_to_bottom)  # [chat-scroll patch] always open at the newest messages
+        GLib.idle_add(
+            self._scroll_to_bottom
+        )  # [chat-scroll patch] always open at the newest messages
         self._scroll_pending = not self.get_mapped()  # [chat-scroll fix] loaded while hidden
         if not getattr(self, "_scroll_map_hooked", False):
             self.connect("map", self._on_messages_shown)
@@ -538,7 +529,9 @@ class MessagesView(Gtk.Box):
                 end=(sender_prefix, sender_name, sender_peer, STYLE_DEFAULT),
             )
             path.set_margin_top(4)
-            path.set_min_children_per_line(min(len(message.path_hops) + 2, 6))  # [channel-actions patch] one row
+            path.set_min_children_per_line(
+                min(len(message.path_hops) + 2, 6)
+            )  # [channel-actions patch] one row
             self._details_box.append(path)
             from meshcore_console.ui_gtk.widgets.trace_view import enable_hop_targets
 
@@ -595,25 +588,37 @@ class MessagesView(Gtk.Box):
             notes.append(lab)
 
         contact = next(
-            (p for p in self._service.list_peers() if not p.is_repeater and p.display_name == message.sender_id),
+            (
+                p
+                for p in self._service.list_peers()
+                if not p.is_repeater and p.display_name == message.sender_id
+            ),
             None,
         )
         if contact is not None:
-            fav = Gtk.Button(label="\u2605 Unfavorite" if contact.is_favorite else "\u2606 Favorite")
-            fav.set_tooltip_text(f"Mark {contact.display_name} as a favourite under Peers \u203a Contacts")
+            fav = Gtk.Button(
+                label="\u2605 Unfavorite" if contact.is_favorite else "\u2606 Favorite"
+            )
+            fav.set_tooltip_text(
+                f"Mark {contact.display_name} as a favourite under Peers \u203a Contacts"
+            )
             fav.connect("clicked", self._on_message_fav_clicked, contact.peer_id)
             row.append(fav)
         else:
-            note(f"{message.sender_id} isn't in your contacts yet: channel messages carry only a name. "
-                 "They'll appear (and can be favourited) once their advert is heard.")
+            note(
+                f"{message.sender_id} isn't in your contacts yet: channel messages carry only a name. "
+                "They'll appear (and can be favourited) once their advert is heard."
+            )
 
         hops = [str(h) for h in reversed(message.path_hops or [])]  # our side first
         if hops and hasattr(self._service, "trace_hops"):
             results = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
             trace = Gtk.Button(label="Trace route")
             trace.add_css_class("hop-trace-btn")  # [hop-target patch]
-            trace.set_tooltip_text("Round-trip TRACE through the repeaters this message came through, "
-                                   "to the one nearest the sender and back: SNR for every link")
+            trace.set_tooltip_text(
+                "Round-trip TRACE through the repeaters this message came through, "
+                "to the one nearest the sender and back: SNR for every link"
+            )
             trace.connect("clicked", self._on_message_trace_clicked, hops, results)
             row.append(trace)
             box.append(notes)
@@ -624,10 +629,14 @@ class MessagesView(Gtk.Box):
             box.append(notes)
         return box
 
-    def _on_message_reply_clicked(self, _btn: Gtk.Button, message: Message) -> None:  # [channel-reply patch]
+    def _on_message_reply_clicked(
+        self, _btn: Gtk.Button, message: Message
+    ) -> None:  # [channel-reply patch]
         """Start a reply: in a group channel, prefix the draft with @[sender] (the
         MeshCore mention format, shown as @sender); in a DM just focus the box."""
-        channel = next((c for c in self._service.list_channels() if c.channel_id == message.channel_id), None)
+        channel = next(
+            (c for c in self._service.list_channels() if c.channel_id == message.channel_id), None
+        )
         is_group = channel is None or channel.kind == "group"
         text = self._entry.get_text()
         mention = f"@[{message.sender_id}] "

@@ -162,9 +162,7 @@ class NodeBadge(Gtk.Box):
             self._popover.unparent()
             self._popover = None
 
-    def _on_left_click(
-        self, gesture: Gtk.GestureClick, n_press: int, _x: float, _y: float
-    ) -> None:
+    def _on_left_click(self, gesture: Gtk.GestureClick, n_press: int, _x: float, _y: float) -> None:
         # [map-jump patch] A single click opens the popover once the double-click
         # window has passed; a double click jumps to the node on the Map tab.
         gesture.set_state(Gtk.EventSequenceState.CLAIMED)
@@ -194,7 +192,7 @@ class NodeBadge(Gtk.Box):
             self._popover.set_parent(self)
         content = self._build_popover(self._prefix, self._display_name, self._peer)
         actions = getattr(self, "popover_actions", None)  # [hop-target patch]
-        for label, fn in (actions(self) if actions else []):
+        for label, fn in actions(self) if actions else []:
             act = Gtk.Button(label=label)
             act.add_css_class("flat")
             act.set_margin_top(4)

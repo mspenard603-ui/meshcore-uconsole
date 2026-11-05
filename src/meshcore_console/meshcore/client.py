@@ -247,8 +247,12 @@ class MeshcoreClient(MeshcoreService):
             channel = Channel(channel_id="public", display_name="#public", unread_count=0)
             self._channels["public"] = channel
             self._channel_store.add_or_update(channel)
-        return sorted((c for c in self._channels.values() if c.kind != "room"),  # [room-chat patch] rooms have their own tab
-                      key=lambda c: c.display_name.lower())
+        return sorted(
+            (
+                c for c in self._channels.values() if c.kind != "room"
+            ),  # [room-chat patch] rooms have their own tab
+            key=lambda c: c.display_name.lower(),
+        )
 
     def ensure_channel(self, channel_id: str, display_name: str | None = None) -> Channel:
         """Ensure a channel exists, creating it if necessary."""
@@ -692,9 +696,7 @@ class MeshcoreClient(MeshcoreService):
         if inbound_path and path_len_encoded is not None:  # [path-order patch]
             _hs = (path_len_encoded >> 6) + 1
             _b = bytes(inbound_path)
-            inbound_path = b"".join(
-                _b[i : i + _hs] for i in reversed(range(0, len(_b), _hs))
-            )
+            inbound_path = b"".join(_b[i : i + _hs] for i in reversed(range(0, len(_b), _hs)))
         if path_len_encoded is None and public_key and "path_hops" in data:
             if not path_hops:
                 inbound_path = b""
@@ -912,8 +914,13 @@ class MeshcoreClient(MeshcoreService):
         cid = self.room_channel_id(room)
         chan = self._channels.get(cid)
         if chan is None:
-            chan = Channel(channel_id=cid, display_name=room.display_name, unread_count=0,
-                           peer_name=room.display_name, kind="room")
+            chan = Channel(
+                channel_id=cid,
+                display_name=room.display_name,
+                unread_count=0,
+                peer_name=room.display_name,
+                kind="room",
+            )
             self._channels[cid] = chan
             self._channel_store.add_or_update(chan)
         return chan
@@ -927,7 +934,14 @@ class MeshcoreClient(MeshcoreService):
             return self._settings.node_name
         if (room.public_key or "").lower().startswith(prefix):
             return room.display_name  # the room's own (system) posts
-        found = next((p for p in self._peers.values() if p.public_key and p.public_key.lower().startswith(prefix)), None)
+        found = next(
+            (
+                p
+                for p in self._peers.values()
+                if p.public_key and p.public_key.lower().startswith(prefix)
+            ),
+            None,
+        )
         return found.display_name if found is not None else prefix.upper()
 
     def _store_room_post(self, room: Peer, data: MeshEventDict, text: str) -> None:
@@ -942,10 +956,16 @@ class MeshcoreClient(MeshcoreService):
             return  # re-pushed after a missed ACK
         created = datetime.fromtimestamp(ts, UTC) if ts > 1_600_000_000 else datetime.now(UTC)
         snr, rssi = data.get("snr"), data.get("rssi")
-        message = Message(message_id=msg_id, sender_id=self._room_author(room, prefix), body=text,
-                          channel_id=chan.channel_id, created_at=created, is_outgoing=False,
-                          snr=float(snr) if snr is not None else None,
-                          rssi=int(rssi) if rssi is not None else None)
+        message = Message(
+            message_id=msg_id,
+            sender_id=self._room_author(room, prefix),
+            body=text,
+            channel_id=chan.channel_id,
+            created_at=created,
+            is_outgoing=False,
+            snr=float(snr) if snr is not None else None,
+            rssi=int(rssi) if rssi is not None else None,
+        )
         self._messages.append(message)
         self._message_store.append(message)
         chan.unread_count += 1
@@ -1000,7 +1020,9 @@ class MeshcoreClient(MeshcoreService):
         except Exception:  # noqa: BLE001
             contact.sync_since = 0
         try:
-            result = self._run_async(self._session.send_repeater_login(room_name, password), timeout=15.0)
+            result = self._run_async(
+                self._session.send_repeater_login(room_name, password), timeout=15.0
+            )
         except Exception as exc:  # noqa: BLE001
             result = {"success": False, "reason": str(exc) or type(exc).__name__}
         if result.get("success"):
@@ -1009,8 +1031,13 @@ class MeshcoreClient(MeshcoreService):
                 perms = 3
             if not hasattr(self, "_room_sessions"):
                 self._room_sessions = {}
-            self._room_sessions[room_name] = {"time": _time.time(), "perms": perms,
-                                              "role": {3: "admin", 2: "read/write", 1: "read-only"}.get(perms, "guest (read-only)")}
+            self._room_sessions[room_name] = {
+                "time": _time.time(),
+                "perms": perms,
+                "role": {3: "admin", 2: "read/write", 1: "read-only"}.get(
+                    perms, "guest (read-only)"
+                ),
+            }
             if save_password:
                 self._repeater_password_store.save_password(room_name, password)
         return result
@@ -1021,17 +1048,28 @@ class MeshcoreClient(MeshcoreService):
         if room is None or not self._connected:
             return {"success": False, "reason": "Radio not connected" if room else "Room not known"}
         try:
-            res = self._run_async(self._session.send_text(peer_name=room_name, message=text), timeout=30.0)
+            res = self._run_async(
+                self._session.send_text(peer_name=room_name, message=text), timeout=30.0
+            )
         except Exception as exc:  # noqa: BLE001
             return {"success": False, "reason": str(exc) or type(exc).__name__}
         ok = bool(res.get("success")) if isinstance(res, dict) else bool(res)
         if ok:
             chan = self._room_channel(room)
-            msg = Message(message_id=str(uuid4()), sender_id=self._settings.node_name, body=text,
-                          channel_id=chan.channel_id, created_at=datetime.now(UTC), is_outgoing=True)
+            msg = Message(
+                message_id=str(uuid4()),
+                sender_id=self._settings.node_name,
+                body=text,
+                channel_id=chan.channel_id,
+                created_at=datetime.now(UTC),
+                is_outgoing=True,
+            )
             self._messages.append(msg)
             self._message_store.append(msg)
-        return {"success": ok, "reason": "" if ok else "No ACK from the room (not delivered, or no write access)"}
+        return {
+            "success": ok,
+            "reason": "" if ok else "No ACK from the room (not delivered, or no write access)",
+        }
 
     def list_recent_events(self, limit: int = 50) -> list[MeshEventDict]:
         if limit <= 0:
@@ -1233,7 +1271,9 @@ class MeshcoreClient(MeshcoreService):
             return {"success": False, "reason": "Radio not connected"}
         try:
             result = self._run_async(
-                request_neighbours(node=node, contact_name=peer_name, timeout=10.0, prefix_len=0, max_pages=3),
+                request_neighbours(
+                    node=node, contact_name=peer_name, timeout=10.0, prefix_len=0, max_pages=3
+                ),
                 timeout=40.0,
             )
         except Exception as exc:  # noqa: BLE001
@@ -1254,7 +1294,9 @@ class MeshcoreClient(MeshcoreService):
         if not self._connected or node is None:
             return {"success": False, "reason": "Radio not connected"}
         try:
-            return self._run_async(request_owner_info(node=node, contact_name=peer_name, timeout=10.0), timeout=15.0)
+            return self._run_async(
+                request_owner_info(node=node, contact_name=peer_name, timeout=10.0), timeout=15.0
+            )
         except Exception as exc:  # noqa: BLE001
             return {"success": False, "reason": str(exc) or type(exc).__name__}
 
@@ -1271,14 +1313,25 @@ class MeshcoreClient(MeshcoreService):
         except ValueError as exc:
             return {"success": False, "reason": str(exc)}
         try:
-            result = self._run_async(run_trace(node=node, route=route, width=width, timeout=20.0), timeout=25.0)
+            result = self._run_async(
+                run_trace(node=node, route=route, width=width, timeout=20.0), timeout=25.0
+            )
         except Exception as exc:  # noqa: BLE001
             result = {"success": False, "reason": str(exc) or type(exc).__name__, "route": route}
         # log it against the target repeater when its hash names exactly one
         target = str(hops[-1]).lower()
-        matches = [p for p in self._peers.values() if p.is_repeater and p.public_key and p.public_key.lower().startswith(target)]
+        matches = [
+            p
+            for p in self._peers.values()
+            if p.is_repeater and p.public_key and p.public_key.lower().startswith(target)
+        ]
         if len(matches) == 1:
-            log_trace(self._repeater_samples, matches[0].public_key, result, self._settings.spreading_factor)
+            log_trace(
+                self._repeater_samples,
+                matches[0].public_key,
+                result,
+                self._settings.spreading_factor,
+            )
         return result
 
     def get_repeater_samples(self):

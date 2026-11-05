@@ -86,8 +86,12 @@ class MainWindow(Adw.ApplicationWindow):
         self._stack.add_named(AnalyzerView(self._service, self._event_store, layout), "analyzer")
         # [rooms patch] one PeersView per tab; "peers" stays the Repeaters page so
         # existing jumps to it keep working (contacts and rooms are routed below)
-        self._stack.add_named(PeersView(self._service, self._event_store, layout, kind="contacts"), "contacts")
-        self._stack.add_named(PeersView(self._service, self._event_store, layout, kind="rooms"), "rooms")
+        self._stack.add_named(
+            PeersView(self._service, self._event_store, layout, kind="contacts"), "contacts"
+        )
+        self._stack.add_named(
+            PeersView(self._service, self._event_store, layout, kind="rooms"), "rooms"
+        )
         # [admin-fold patch] Admin lives inside Repeaters (Status / Admin tabs)
         _repeaters = PeersView(self._service, self._event_store, layout, kind="repeaters")
         _repeaters.attach_admin(AdminView(self._service, self._event_store, layout))
@@ -275,7 +279,9 @@ class MainWindow(Adw.ApplicationWindow):
             if popover is not None and popover.get_visible():
                 popover.popdown()
 
-        if page_name == "settings":  # [settings-close patch] remember where Settings was opened from
+        if (
+            page_name == "settings"
+        ):  # [settings-close patch] remember where Settings was opened from
             current = self._stack.get_visible_child_name()
             if current and current != "settings":
                 self._before_settings = current
@@ -486,10 +492,18 @@ class MainWindow(Adw.ApplicationWindow):
                 h, w = max(kids, key=lambda k: k[0])
                 css = ".".join(w.get_css_classes()[:3])
                 text = w.get_label() if isinstance(w, (Gtk.Label, Gtk.Button)) else ""
-                chain.append(f"{type(w).__name__}{('.' + css) if css else ''}"
-                             f"{(' ' + repr(str(text)[:30])) if text else ''}={h}")
-            logger.warning("[ui-overflow] %s page needs %d px, window gives %d px (scrolls). "
-                           "Tallest chain: %s", name, need, avail, " > ".join(chain))
+                chain.append(
+                    f"{type(w).__name__}{('.' + css) if css else ''}"
+                    f"{(' ' + repr(str(text)[:30])) if text else ''}={h}"
+                )
+            logger.warning(
+                "[ui-overflow] %s page needs %d px, window gives %d px (scrolls). "
+                "Tallest chain: %s",
+                name,
+                need,
+                avail,
+                " > ".join(chain),
+            )
         except Exception as exc:  # noqa: BLE001
             logger.debug("overflow check failed: %s", exc)
         return True
@@ -902,8 +916,10 @@ class MainWindow(Adw.ApplicationWindow):
         except Exception:  # noqa: BLE001
             mode = 0
         width = min(max(mode, 0), 2) + 1
-        tip = (f"Your path hash: {key[: width * 2]} ({width}-byte, path hash mode {mode}). "
-               f"1-byte: {key[:2]}  2-byte: {key[:4]}  3-byte: {key[:6]}\nPublic key: {key}")
+        tip = (
+            f"Your path hash: {key[: width * 2]} ({width}-byte, path hash mode {mode}). "
+            f"1-byte: {key[:2]}  2-byte: {key[:4]}  3-byte: {key[:6]}\nPublic key: {key}"
+        )
         if hasattr(self, "_subtitle"):
             self._subtitle.set_tooltip_text(tip)
         else:

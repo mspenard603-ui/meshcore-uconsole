@@ -26,7 +26,9 @@ class Peer:
     longitude: float | None = None
     location_updated: datetime | None = None
     is_favorite: bool = False
-    node_type: int | None = None  # advert type: 1 companion, 2 repeater, 3 room server, 4 sensor [rooms patch]
+    node_type: int | None = (
+        None  # advert type: 1 companion, 2 repeater, 3 room server, 4 sensor [rooms patch]
+    )
 
 
 @dataclass(slots=True)

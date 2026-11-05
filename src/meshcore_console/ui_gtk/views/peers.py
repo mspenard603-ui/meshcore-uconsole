@@ -106,8 +106,9 @@ def _has_location(lat: float | None, lon: float | None) -> bool:
 
 
 class PeersView(Gtk.Box):
-    def __init__(self, service: MeshcoreService, event_store: UiEventStore, layout: Layout,
-                 kind: str = "all") -> None:  # [rooms patch] "contacts", "rooms" or "repeaters"
+    def __init__(
+        self, service: MeshcoreService, event_store: UiEventStore, layout: Layout, kind: str = "all"
+    ) -> None:  # [rooms patch] "contacts", "rooms" or "repeaters"
         super().__init__(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self._service = service
         self._event_store = event_store
@@ -126,8 +127,12 @@ class PeersView(Gtk.Box):
         contacts_column.set_size_request(layout.peers_list_width, -1)
 
         # [clear-peers patch] header with Clear button
-        contacts_column.append(self._list_header("Rooms" if kind == "rooms" else "Contacts",  # [rooms patch]
-                                                 repeaters=False))
+        contacts_column.append(
+            self._list_header(
+                "Rooms" if kind == "rooms" else "Contacts",  # [rooms patch]
+                repeaters=False,
+            )
+        )
 
         contacts_scroll = Gtk.ScrolledWindow.new()
         contacts_scroll.set_vexpand(True)
@@ -178,7 +183,9 @@ class PeersView(Gtk.Box):
         self._details_title.set_margin_start(12)
         self._details_title.set_margin_top(10)
         self._details_title.set_margin_bottom(8)
-        self._title_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)  # [admin-fold patch]
+        self._title_row = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+        )  # [admin-fold patch]
         self._details_title.set_hexpand(True)
         self._title_row.append(self._details_title)
         details_column.append(self._title_row)
@@ -237,15 +244,22 @@ class PeersView(Gtk.Box):
             clear_listbox(listbox)
 
         peers = self._service.list_peers()
-        self._last_peer_snapshot = self._peer_snapshot(peers) + self._login_snapshot()  # [admin-fold patch]
+        self._last_peer_snapshot = (
+            self._peer_snapshot(peers) + self._login_snapshot()
+        )  # [admin-fold patch]
 
         # [peer-sort patch] user-selected order, favourites always on top
         self._distances = self._compute_distances(peers)
-        contacts = self._sort_peers([p for p in peers if not p.is_repeater and self._in_view(p)], False)
+        contacts = self._sort_peers(
+            [p for p in peers if not p.is_repeater and self._in_view(p)], False
+        )
         network = self._sort_peers([p for p in peers if p.is_repeater and self._in_view(p)], True)
 
-        self._populate_list(self._contacts_list, contacts,  # [rooms patch]
-                            "No room servers heard yet" if self._kind == "rooms" else "No contacts yet")
+        self._populate_list(
+            self._contacts_list,
+            contacts,  # [rooms patch]
+            "No room servers heard yet" if self._kind == "rooms" else "No contacts yet",
+        )
         self._populate_list(self._network_list, network, "No repeaters yet")
 
         # Restore selection
@@ -306,7 +320,9 @@ class PeersView(Gtk.Box):
 
     def get_default_focus(self) -> Gtk.Widget:
         """Return the widget that should receive focus when this view is shown."""
-        return self._network_list if self._kind == "repeaters" else self._contacts_list  # [rooms patch]
+        return (
+            self._network_list if self._kind == "repeaters" else self._contacts_list
+        )  # [rooms patch]
 
     def _room_autologin_tick(self) -> bool:  # [room-chat patch]
         """Once after start-up, then every 6 h: a room stops pushing to a client whose
@@ -328,6 +344,7 @@ class PeersView(Gtk.Box):
         admin.set_vexpand(True)
         self._sub_stack.add_named(admin, "admin")  # [repeater-tabs patch] one panel:
         self._sub_stack.set_visible_child_name("admin")  # route + login, then Status/Graph/Console
+
         # Status = Admin's stats, then this view's extras (last trace, telemetry, buttons)
         def _detach(w):
             parent = w.get_parent()
@@ -335,6 +352,7 @@ class PeersView(Gtk.Box):
                 parent.set_child(None)
             elif isinstance(parent, Gtk.ScrolledWindow):
                 parent.set_child(None)
+
         _detach(self._details_content)
         _detach(admin._status_content)
         admin._status_scroll.set_child(None)
@@ -382,7 +400,9 @@ class PeersView(Gtk.Box):
             self._render_telemetry(cached)
         actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         actions.set_margin_top(16)
-        fav_btn = Gtk.Button.new_with_label("\u2606 Favorite" if not peer.is_favorite else "\u2605 Unfavorite")
+        fav_btn = Gtk.Button.new_with_label(
+            "\u2606 Favorite" if not peer.is_favorite else "\u2605 Unfavorite"
+        )
         fav_btn.connect("clicked", self._on_toggle_favorite_clicked, peer)
         actions.append(fav_btn)
         telem_btn = Gtk.Button.new_with_label("Request Telemetry")
@@ -390,14 +410,18 @@ class PeersView(Gtk.Box):
         actions.append(telem_btn)
         self._details_content.append(actions)
 
-    def _refresh_repeater_extras(self) -> None:  # [repeater-tabs patch] after a trace from the header
+    def _refresh_repeater_extras(
+        self,
+    ) -> None:  # [repeater-tabs patch] after a trace from the header
         if self._selected_peer is not None and self._selected_peer.is_repeater:
             self._show_repeater_extras(self._selected_peer)
 
     def _admin_deselected(self) -> bool:
         self._admin_idle = 0
         if self._network_list.get_selected_row() is None and self._admin is not None:
-            self._sub_switcher.set_visible(False)  # [repeater-tabs patch] Admin shows 'Select a repeater'
+            self._sub_switcher.set_visible(
+                False
+            )  # [repeater-tabs patch] Admin shows 'Select a repeater'
             self._admin.show_repeater(None)
         return False
 
@@ -429,10 +453,14 @@ class PeersView(Gtk.Box):
         self._sync_admin(None)  # [admin-fold patch]
         self._clear_details()
         self._details_content.append(
-            EmptyState({"contacts": "Select a contact to view details",  # [rooms patch]
-                        "rooms": "Select a room server to view details",
-                        "repeaters": "Select a repeater to view details"}.get(
-                            self._kind, "Select a contact or repeater to view details"), vexpand=True)
+            EmptyState(
+                {
+                    "contacts": "Select a contact to view details",  # [rooms patch]
+                    "rooms": "Select a room server to view details",
+                    "repeaters": "Select a repeater to view details",
+                }.get(self._kind, "Select a contact or repeater to view details"),
+                vexpand=True,
+            )
         )
 
     def _clear_details(self) -> None:
@@ -459,11 +487,21 @@ class PeersView(Gtk.Box):
             self._details_content.append(RoomPanel(self._service, peer))
 
         # Type badge
-        type_label = Gtk.Label(label="Repeater" if peer.is_repeater else  # [rooms patch]
-                               {3: "Room server", 4: "Sensor"}.get(getattr(peer, "node_type", None), "Contact"))
+        type_label = Gtk.Label(
+            label="Repeater"
+            if peer.is_repeater
+            # [rooms patch]
+            else {3: "Room server", 4: "Sensor"}.get(getattr(peer, "node_type", None), "Contact")
+        )
         type_label.add_css_class("status-pill")
-        type_label.add_css_class("warn" if peer.is_repeater else  # [room-marker patch]
-                                 "room" if getattr(peer, "node_type", None) == 3 else "ok")
+        type_label.add_css_class(
+            "warn"
+            if peer.is_repeater
+            # [room-marker patch]
+            else "room"
+            if getattr(peer, "node_type", None) == 3
+            else "ok"
+        )
         type_label.set_halign(Gtk.Align.START)
         self._details_content.append(type_label)
 
@@ -522,7 +560,9 @@ class PeersView(Gtk.Box):
                 start=(self_prefix, self_name, None, STYLE_SELF),
                 end=(peer_prefix, peer.display_name, peer, STYLE_DEFAULT),
             )
-            path.set_min_children_per_line(min(len(peer.last_path) + 2, 6))  # [peers-trace patch] one row,
+            path.set_min_children_per_line(
+                min(len(peer.last_path) + 2, 6)
+            )  # [peers-trace patch] one row,
             self._details_content.append(path)  # so the badges never stack over what follows
             if not peer.is_repeater:  # [hop-target patch] click a repeater: 'Trace to here'
                 from meshcore_console.ui_gtk.widgets.trace_view import enable_hop_targets
@@ -534,7 +574,9 @@ class PeersView(Gtk.Box):
             direct_label.set_halign(Gtk.Align.START)
             self._details_content.append(direct_label)
 
-        if not peer.is_repeater:  # [contact-trace patch] trace the repeaters on the route to a contact
+        if (
+            not peer.is_repeater
+        ):  # [contact-trace patch] trace the repeaters on the route to a contact
             if peer.last_path and hasattr(self._service, "trace_hops"):
                 c_btn = Gtk.Button(label="Trace route")
                 c_btn.add_css_class("hop-trace-btn")  # [hop-target patch]
@@ -549,7 +591,9 @@ class PeersView(Gtk.Box):
                 self._details_content.append(c_results)
                 self._show_latest_trace(peer, c_btn, c_results)
             elif peer.last_path is not None and len(peer.last_path) == 0:
-                c_note = Gtk.Label(label="Heard directly (no repeaters), so there is no route to trace.")
+                c_note = Gtk.Label(
+                    label="Heard directly (no repeaters), so there is no route to trace."
+                )
                 c_note.add_css_class("panel-muted")
                 c_note.set_halign(Gtk.Align.START)
                 self._details_content.append(c_note)
@@ -557,12 +601,16 @@ class PeersView(Gtk.Box):
         if peer.is_repeater:  # [peers-trace patch] round-trip TRACE under the path
             trace_btn = Gtk.Button(label="Trace path")
             trace_btn.set_halign(Gtk.Align.START)
-            trace_btn.set_tooltip_text("Send a round-trip TRACE along this path: SNR for every link, both ways")
+            trace_btn.set_tooltip_text(
+                "Send a round-trip TRACE along this path: SNR for every link, both ways"
+            )
             trace_results = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
             trace_btn.connect("clicked", self._on_peers_trace_clicked, peer, trace_results)
             self._details_content.append(trace_btn)
             self._details_content.append(trace_results)
-            self._show_latest_trace(peer, trace_btn, trace_results)  # [trace-source patch] newest from the log
+            self._show_latest_trace(
+                peer, trace_btn, trace_results
+            )  # [trace-source patch] newest from the log
 
         # === Public Key Section ===
         self._add_section_header("Public Key")
@@ -602,10 +650,17 @@ class PeersView(Gtk.Box):
 
         self._details_content.append(actions)
 
-    _TRACE_SOURCES = {"auto": "auto-trace", "admin": "Admin", "map": "Map", "peers": "Peers",
-                      "channels": "Channels"}  # [channel-actions patch]
+    _TRACE_SOURCES = {
+        "auto": "auto-trace",
+        "admin": "Admin",
+        "map": "Map",
+        "peers": "Peers",
+        "channels": "Channels",
+    }  # [channel-actions patch]
 
-    def _show_latest_trace(self, peer: Peer, btn: Gtk.Button, results: Gtk.Box) -> None:  # [trace-source patch]
+    def _show_latest_trace(
+        self, peer: Peer, btn: Gtk.Button, results: Gtk.Box
+    ) -> None:  # [trace-source patch]
         """Newest trace to this repeater: from the trace log (auto-trace, Admin, Map,
         Peers) or this screen's own memory, whichever is newer, with when and who."""
         import time as _time
@@ -625,14 +680,20 @@ class PeersView(Gtk.Box):
             best = (mem[0], mem[1], "peers")
         try:
             store = self._service.get_repeater_samples()
-            rows = store.trace_series(peer.public_key, _time.time() - 30 * 86400) if peer.public_key else []
+            rows = (
+                store.trace_series(peer.public_key, _time.time() - 30 * 86400)
+                if peer.public_key
+                else []
+            )
         except Exception:  # noqa: BLE001
             rows = []
         if rows and (best is None or rows[-1]["t"] > best[0] + 1):
             row = rows[-1]
             result = {
                 "success": row["ok"],
-                "links": [{"from": l[0], "to": l[1], "snr": l[2]} for l in row.get("links") or []],
+                "links": [
+                    {"from": lk[0], "to": lk[1], "snr": lk[2]} for lk in row.get("links") or []
+                ],
                 "rtt_ms": row.get("rtt_ms") or 0,
                 "reason": row.get("reason") or "no reply",
             }
@@ -641,7 +702,9 @@ class PeersView(Gtk.Box):
             return
         when, result, source = best
         dt = datetime.fromtimestamp(when)
-        stamp_txt = dt.strftime("%H:%M:%S" if dt.date() == datetime.now().date() else "%b %-d %H:%M")
+        stamp_txt = dt.strftime(
+            "%H:%M:%S" if dt.date() == datetime.now().date() else "%b %-d %H:%M"
+        )
         who = self._TRACE_SOURCES.get(source or "", "")
         stamp = Gtk.Label(label=f"Last trace at {stamp_txt}" + (f" ({who})" if who else ""))
         stamp.add_css_class("panel-muted")
@@ -666,7 +729,9 @@ class PeersView(Gtk.Box):
             self._peer_trace_running: set = set()
         return self._peer_traces, self._peer_trace_running
 
-    def _restore_peer_trace(self, peer: Peer, btn: Gtk.Button, results: Gtk.Box) -> None:  # [peers-trace keep]
+    def _restore_peer_trace(
+        self, peer: Peer, btn: Gtk.Button, results: Gtk.Box
+    ) -> None:  # [peers-trace keep]
         """After a panel rebuild: show the running state or the last trace again."""
         from datetime import datetime
 
@@ -682,7 +747,9 @@ class PeersView(Gtk.Box):
         if cached is None:
             return
         when, result = cached
-        stamp = Gtk.Label(label=f"Last trace at {datetime.fromtimestamp(when).strftime('%H:%M:%S')}")
+        stamp = Gtk.Label(
+            label=f"Last trace at {datetime.fromtimestamp(when).strftime('%H:%M:%S')}"
+        )
         stamp.add_css_class("panel-muted")
         stamp.set_halign(Gtk.Align.START)
         results.append(stamp)
@@ -698,7 +765,9 @@ class PeersView(Gtk.Box):
             )
         )
 
-    def _on_contact_trace_clicked(self, btn: Gtk.Button, peer: Peer, results: Gtk.Box) -> None:  # [contact-trace patch]
+    def _on_contact_trace_clicked(
+        self, btn: Gtk.Button, peer: Peer, results: Gtk.Box
+    ) -> None:  # [contact-trace patch]
         """Trace the repeaters on a contact's route (our side first), out and back."""
         import threading
 
@@ -714,8 +783,16 @@ class PeersView(Gtk.Box):
         clear_children(results)
         cache, running = self._peer_trace_state()
         running.add(peer.peer_id)
-        relay = next((p for p in self._service.list_peers() if p.is_repeater and p.public_key
-                      and p.public_key.lower().startswith(hops[-1].lower())), None)
+        relay = next(
+            (
+                p
+                for p in self._service.list_peers()
+                if p.is_repeater
+                and p.public_key
+                and p.public_key.lower().startswith(hops[-1].lower())
+            ),
+            None,
+        )
         relay_name = relay.display_name if relay is not None else hops[-1]
 
         def work() -> None:
@@ -739,10 +816,15 @@ class PeersView(Gtk.Box):
                 if self._selected_peer is None or self._selected_peer.peer_id != peer.peer_id:
                     return False  # another peer is shown now; the result is kept for this one
                 clear_children(res)
-                where = ("(the repeater nearest them)" if len(hops) == full_len
-                         else f"(hop {len(hops)} of {full_len})")  # [hop-target patch]
-                note = Gtk.Label(label=f"Route to {peer.display_name}, traced out to {relay_name} "
-                                       f"{where} and back.")
+                where = (
+                    "(the repeater nearest them)"
+                    if len(hops) == full_len
+                    else f"(hop {len(hops)} of {full_len})"
+                )  # [hop-target patch]
+                note = Gtk.Label(
+                    label=f"Route to {peer.display_name}, traced out to {relay_name} "
+                    f"{where} and back."
+                )
                 note.add_css_class("panel-muted")
                 note.set_wrap(True)
                 note.set_xalign(0.0)
@@ -769,7 +851,9 @@ class PeersView(Gtk.Box):
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _on_peers_trace_clicked(self, btn: Gtk.Button, peer: Peer, results: Gtk.Box) -> None:  # [peers-trace patch]
+    def _on_peers_trace_clicked(
+        self, btn: Gtk.Button, peer: Peer, results: Gtk.Box
+    ) -> None:  # [peers-trace patch]
         import threading
 
         from meshcore_console.ui_gtk.widgets.trace_view import build_trace_view
@@ -812,7 +896,11 @@ class PeersView(Gtk.Box):
                         compact=True,  # [peers-trace fix] full table overflowed the window
                     )
                 )
-                logger.info("trace %s: %s", peer.display_name, "ok" if result.get("success") else result.get("reason"))
+                logger.info(
+                    "trace %s: %s",
+                    peer.display_name,
+                    "ok" if result.get("success") else result.get("reason"),
+                )
                 return False
 
             GLib.idle_add(done)
@@ -1039,8 +1127,14 @@ class PeersView(Gtk.Box):
             GLib.idle_add(_clear)
 
     def _on_clear_clicked(self, _button: Gtk.Button, repeaters: bool) -> None:
-        kind = "repeaters" if repeaters else ("rooms" if self._kind == "rooms" else "contacts")  # [rooms patch]
-        peers = [p for p in self._service.list_peers() if bool(p.is_repeater) == repeaters and self._in_view(p)]
+        kind = (
+            "repeaters" if repeaters else ("rooms" if self._kind == "rooms" else "contacts")
+        )  # [rooms patch]
+        peers = [
+            p
+            for p in self._service.list_peers()
+            if bool(p.is_repeater) == repeaters and self._in_view(p)
+        ]
         if not peers:
             return
         favs = sum(1 for p in peers if p.is_favorite)

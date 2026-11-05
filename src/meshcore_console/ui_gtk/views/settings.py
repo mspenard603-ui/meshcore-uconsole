@@ -47,9 +47,13 @@ _RADIO_FIELDS = (
     ("path_hash_mode", "Path hash", lambda v: f"{int(v) + 1}-byte"),
     ("hardware_preset", "Hardware preset", str),
     ("en_pins", "Enable pins", lambda v: v or "none"),
-    ("reset_pin", "Reset pin", str), ("busy_pin", "Busy pin", str), ("irq_pin", "IRQ pin", str),
-    ("txen_pin", "TXEN pin", str), ("rxen_pin", "RXEN pin", str),
-    ("use_dio2_rf", "DIO2 RF switch", str), ("use_dio3_tcxo", "DIO3 TCXO", str),
+    ("reset_pin", "Reset pin", str),
+    ("busy_pin", "Busy pin", str),
+    ("irq_pin", "IRQ pin", str),
+    ("txen_pin", "TXEN pin", str),
+    ("rxen_pin", "RXEN pin", str),
+    ("use_dio2_rf", "DIO2 RF switch", str),
+    ("use_dio3_tcxo", "DIO3 TCXO", str),
 )
 
 
@@ -153,7 +157,9 @@ class SettingsView(Gtk.Box):
         reload_btn.connect("clicked", self._on_reload)
         actions.append(reload_btn)
         close_btn = Gtk.Button.new_with_label("Close")  # [settings-close patch]
-        close_btn.set_tooltip_text("Back to the previous screen (Esc). Unsaved changes are discarded.")
+        close_btn.set_tooltip_text(
+            "Back to the previous screen (Esc). Unsaved changes are discarded."
+        )
         close_btn.connect("clicked", self._on_close_settings)
         actions.append(close_btn)
         esc = Gtk.EventControllerKey.new()
@@ -648,7 +654,9 @@ class SettingsView(Gtk.Box):
         from dataclasses import asdict
 
         try:
-            dirty = asdict(self._collect_settings(allow_partial=True)) != asdict(self._service.get_settings())
+            dirty = asdict(self._collect_settings(allow_partial=True)) != asdict(
+                self._service.get_settings()
+            )
         except Exception:  # noqa: BLE001 - unparsable text in a field is an unsaved change too
             dirty = True
         if not dirty:
@@ -658,8 +666,9 @@ class SettingsView(Gtk.Box):
 
         from meshcore_console.ui_gtk.compat import build_alert_dialog, present_dialog
 
-        dialog = build_alert_dialog(self.get_root(), "Discard unsaved changes?",
-                                    "Some settings were changed but not saved.")
+        dialog = build_alert_dialog(
+            self.get_root(), "Discard unsaved changes?", "Some settings were changed but not saved."
+        )
         dialog.add_response("cancel", "Keep editing")
         dialog.add_response("discard", "Discard")
         dialog.set_response_appearance("discard", Adw.ResponseAppearance.DESTRUCTIVE)
@@ -713,14 +722,19 @@ class SettingsView(Gtk.Box):
         else:
             self._status_label.set_text("Settings saved.")
 
-    def _confirm_radio_changes(self, settings, changes: list[str]) -> None:  # [settings-guard patch]
+    def _confirm_radio_changes(
+        self, settings, changes: list[str]
+    ) -> None:  # [settings-guard patch]
         from gi.repository import Adw
 
         from meshcore_console.ui_gtk.compat import build_alert_dialog, present_dialog
 
-        body = ("These radio settings will change:\n\n" + "\n".join(f"\u2022 {c}" for c in changes)
-                + "\n\nA wrong frequency, bandwidth, SF or CR takes you off the mesh (you can still "
-                  "hear nothing and nobody hears you). Save anyway?")
+        body = (
+            "These radio settings will change:\n\n"
+            + "\n".join(f"\u2022 {c}" for c in changes)
+            + "\n\nA wrong frequency, bandwidth, SF or CR takes you off the mesh (you can still "
+            "hear nothing and nobody hears you). Save anyway?"
+        )
         dialog = build_alert_dialog(self.get_root(), "Change radio settings?", body)
         dialog.add_response("cancel", "Cancel")
         dialog.add_response("revert", "Discard these changes")
@@ -737,7 +751,9 @@ class SettingsView(Gtk.Box):
             self._on_save(None)
         elif response == "revert":
             self._load_from_service()
-            self._status_label.set_text("Radio changes discarded; form reloaded from saved settings.")
+            self._status_label.set_text(
+                "Radio changes discarded; form reloaded from saved settings."
+            )
         else:
             self._status_label.set_text("Not saved.")
 

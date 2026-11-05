@@ -219,7 +219,9 @@ class AdminView(Gtk.Box):
         self._admin_path_box.set_hexpand(True)
         title_row.append(self._admin_path_box)
         self._trace_btn = Gtk.Button(label="Trace")  # [trace patch]
-        self._trace_btn.set_tooltip_text("Round-trip TRACE along this path: SNR for every link, both ways")
+        self._trace_btn.set_tooltip_text(
+            "Round-trip TRACE along this path: SNR for every link, both ways"
+        )
         self._trace_btn.set_valign(Gtk.Align.CENTER)
         self._trace_btn.set_margin_top(6)
         self._trace_btn.set_margin_end(12)
@@ -253,7 +255,9 @@ class AdminView(Gtk.Box):
         self._status_content.set_margin_top(8)
         self._status_content.set_margin_bottom(8)
         self._status_scroll.set_child(self._status_content)
-        self._notebook.append_page(self._status_scroll, Gtk.Label(label="Status"))  # [admin-fold patch]
+        self._notebook.append_page(
+            self._status_scroll, Gtk.Label(label="Status")
+        )  # [admin-fold patch]
 
         # Graph tab [repeater-stats patch]
         from meshcore_console.ui_gtk.widgets.repeater_graph import RepeaterGraphPage
@@ -348,13 +352,23 @@ class AdminView(Gtk.Box):
         quick_row.set_margin_bottom(4)
         # [stats-button patch] 'telemetry' is not a repeater CLI command; 'stats'
         # sends the RepeaterStats request instead and prints the result here.
-        for cmd in ("neighbors", "stats", "owner", "advert", "get repeat", "reboot", "ver"):  # [owner-info patch]
+        for cmd in (
+            "neighbors",
+            "stats",
+            "owner",
+            "advert",
+            "get repeat",
+            "reboot",
+            "ver",
+        ):  # [owner-info patch]
             btn = Gtk.Button.new_with_label(cmd)
             btn.add_css_class("quick-cmd-btn")
             if cmd == "advert":  # [advert-button patch] firmware CLI: flood advert
                 btn.set_tooltip_text("Ask this repeater to send a flood advert now")
             if cmd == "owner":  # [owner-info patch]
-                btn.set_tooltip_text("Owner info, name and firmware version (guest login is enough)")
+                btn.set_tooltip_text(
+                    "Owner info, name and firmware version (guest login is enough)"
+                )
             if cmd == "stats":
                 btn.set_tooltip_text("Request repeater stats (same as Poll now)")
                 btn.connect("clicked", self._on_stats_quick)
@@ -498,8 +512,6 @@ class AdminView(Gtk.Box):
 
     # --- [repeater-stats patch] -----------------------------------------------
     def _add_repeater_stats_section(self, peer: Peer) -> None:
-        from meshcore_console.meshcore.repeater_stats import POLL_INTERVAL_S
-
         store = self._service.get_repeater_samples()
         key = peer.public_key or peer.peer_id
 
@@ -523,33 +535,53 @@ class AdminView(Gtk.Box):
             up = latest.get("total_up_time_secs") or 0
             self._status_content.append(DetailRow("Polled:", to_local_ts(latest["ts"])))
             if latest.get("batt_mv"):
-                self._status_content.append(DetailRow("Battery:", f"{latest['batt_mv'] / 1000:.2f} V"))
+                self._status_content.append(
+                    DetailRow("Battery:", f"{latest['batt_mv'] / 1000:.2f} V")
+                )
             if latest.get("noise_floor") is not None:
-                self._status_content.append(DetailRow("Noise floor:", f"{latest['noise_floor']:.0f} dBm"))
+                self._status_content.append(
+                    DetailRow("Noise floor:", f"{latest['noise_floor']:.0f} dBm")
+                )
             if latest.get("rssi") is not None:
                 snr = latest.get("snr")
                 snr_txt = f", SNR {snr:.2f} dB" if snr is not None else ""
-                self._status_content.append(DetailRow("Its last RX:", f"{latest['rssi']:.0f} dBm{snr_txt}"))
+                self._status_content.append(
+                    DetailRow("Its last RX:", f"{latest['rssi']:.0f} dBm{snr_txt}")
+                )
             if up:
                 d, rem = divmod(int(up), 86400)
-                self._status_content.append(DetailRow("Uptime:", f"{d}d {rem // 3600}h {rem % 3600 // 60}m"))
+                self._status_content.append(
+                    DetailRow("Uptime:", f"{d}d {rem // 3600}h {rem % 3600 // 60}m")
+                )
                 tx = latest.get("total_air_time_secs") or 0
                 rx = latest.get("total_rx_air_time_secs") or 0
                 self._status_content.append(
                     DetailRow("Airtime:", f"TX {100 * tx / up:.1f}%  RX {100 * rx / up:.1f}%")
                 )
             if "n_packets_recv" in latest:
-                self._status_content.append(DetailRow(
-                    "Packets:", f"RX {latest['n_packets_recv']:,}  TX {latest.get('n_packets_sent', 0):,}"))
-                self._status_content.append(DetailRow(
-                    "Flood / direct:",
-                    f"RX {latest.get('n_recv_flood', 0):,} / {latest.get('n_recv_direct', 0):,}  "
-                    f"TX {latest.get('n_sent_flood', 0):,} / {latest.get('n_sent_direct', 0):,}"))
-                self._status_content.append(DetailRow(
-                    "Dups / errors:",
-                    f"{latest.get('n_flood_dups', 0) + latest.get('n_direct_dups', 0):,} / "
-                    f"{latest.get('n_recv_errors', 0):,}"))
-                self._status_content.append(DetailRow("TX queue:", str(latest.get("curr_tx_queue_len", 0))))
+                self._status_content.append(
+                    DetailRow(
+                        "Packets:",
+                        f"RX {latest['n_packets_recv']:,}  TX {latest.get('n_packets_sent', 0):,}",
+                    )
+                )
+                self._status_content.append(
+                    DetailRow(
+                        "Flood / direct:",
+                        f"RX {latest.get('n_recv_flood', 0):,} / {latest.get('n_recv_direct', 0):,}  "
+                        f"TX {latest.get('n_sent_flood', 0):,} / {latest.get('n_sent_direct', 0):,}",
+                    )
+                )
+                self._status_content.append(
+                    DetailRow(
+                        "Dups / errors:",
+                        f"{latest.get('n_flood_dups', 0) + latest.get('n_direct_dups', 0):,} / "
+                        f"{latest.get('n_recv_errors', 0):,}",
+                    )
+                )
+                self._status_content.append(
+                    DetailRow("TX queue:", str(latest.get("curr_tx_queue_len", 0)))
+                )
         else:
             self._status_content.append(self._muted("No stats polled yet"))
         if result:
@@ -563,13 +595,17 @@ class AdminView(Gtk.Box):
         row.append(btn)
         row.append(self._muted("Auto-poll"))  # [poll-interval patch]
         row.append(self._poll_interval_dropdown(peer))
-        row.append(self._muted("while logged in" if logged_in else "(log in to poll; guest is enough)"))
+        row.append(
+            self._muted("while logged in" if logged_in else "(log in to poll; guest is enough)")
+        )
         self._status_content.append(row)
         trow = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)  # [trace-log patch]
         trow.append(self._muted("Auto-trace"))
         trow.append(self._trace_interval_dropdown(peer))
         trow.append(self._muted("round trip, no login needed; see Graph \u203a Trace"))
-        tally = getattr(self, "_trace_retry_tally", {}).get(self._repeater_key(peer.display_name))  # [trace-retry patch]
+        tally = getattr(self, "_trace_retry_tally", {}).get(
+            self._repeater_key(peer.display_name)
+        )  # [trace-retry patch]
         if tally and tally[0]:
             trow.append(self._muted(f"\u00b7 retry recovered {tally[1]} of {tally[0]} failures"))
         for box in (row, trow):  # one line each: short labels, plenty of width
@@ -590,11 +626,12 @@ class AdminView(Gtk.Box):
 
     def _poll_due_repeaters(self) -> bool:
         """Every 60 s: poll one logged-in repeater whose last poll is >= 15 min old."""
-        from meshcore_console.meshcore.repeater_stats import POLL_INTERVAL_S
 
         if self._busy:
             return True
-        if getattr(self, "_cmd_queue", None):  # [login-queue patch] your clicks go before background work
+        if getattr(
+            self, "_cmd_queue", None
+        ):  # [login-queue patch] your clicks go before background work
             return True
         now = time.time()
         if self._auto_login_due(now):  # [auto-login patch] logins before polls
@@ -640,7 +677,9 @@ class AdminView(Gtk.Box):
                     self._update_login_ui(self._service.get_repeater_login_state(sel.display_name))
                 stamp = time.strftime("%H:%M")
                 if result.get("success"):
-                    self._poll_result[peer_name] = f"Last poll {stamp}: OK ({result.get('rtt_ms', 0)} ms)"
+                    self._poll_result[peer_name] = (
+                        f"Last poll {stamp}: OK ({result.get('rtt_ms', 0)} ms)"
+                    )
                 else:
                     self._poll_result[peer_name] = (
                         f"Last poll {stamp} failed: {result.get('reason', 'no response')}"
@@ -878,7 +917,9 @@ class AdminView(Gtk.Box):
                     msg = f"{what.capitalize()} to {name} failed ({result.get('reason', 'no response')}); retry in {when}"
                 logger.info(msg)
                 sel = self._selected_repeater
-                self._append_for(name, "response" if ok else "error", msg)  # [console-history patch]
+                self._append_for(
+                    name, "response" if ok else "error", msg
+                )  # [console-history patch]
                 if sel is not None and sel.display_name == name:
                     self._update_login_ui(self._service.get_repeater_login_state(name))
                     self._populate_status(sel)
@@ -1025,9 +1066,7 @@ class AdminView(Gtk.Box):
         from meshcore_console.ui_gtk.widgets.node_badge import STYLE_DEFAULT, STYLE_SELF
 
         clear_children(self._admin_path_box)
-        current = next(
-            (p for p in self._service.list_peers() if p.peer_id == peer.peer_id), peer
-        )
+        current = next((p for p in self._service.list_peers() if p.peer_id == peer.peer_id), peer)
         self_key = self._service.get_self_public_key()
         self_prefix = (self_key or "")[:2].upper() or "Me"
         self_name = self._service.get_status().node_id
@@ -1085,7 +1124,9 @@ class AdminView(Gtk.Box):
         current = self._trace_intervals().get(self._repeater_key(peer.display_name), 0)
         dropdown.set_selected(secs.index(current) if current in secs else 0)
         dropdown.set_valign(Gtk.Align.CENTER)
-        dropdown.set_tooltip_text("How often to send a round-trip TRACE to this repeater and log the SNR of every link")
+        dropdown.set_tooltip_text(
+            "How often to send a round-trip TRACE to this repeater and log the SNR of every link"
+        )
         dropdown.connect("notify::selected", self._on_trace_interval_changed, peer.display_name)
         return dropdown
 
@@ -1142,7 +1183,11 @@ class AdminView(Gtk.Box):
             tally = self._trace_retry_tally.setdefault(key, [0, 0])
             if result.get("success"):
                 tally[1] += 1
-            logger.info("auto-trace retry %s: %s", name, "ok" if result.get("success") else result.get("reason"))
+            logger.info(
+                "auto-trace retry %s: %s",
+                name,
+                "ok" if result.get("success") else result.get("reason"),
+            )
             sel = self._selected_repeater
             if sel is not None and sel.display_name == name:
                 self._populate_status(sel)
@@ -1189,7 +1234,11 @@ class AdminView(Gtk.Box):
                 if btn is not None:
                     btn.set_sensitive(True)
                     btn.set_label("Trace")
-                logger.info("auto-trace %s: %s", name, "ok" if result.get("success") else result.get("reason"))
+                logger.info(
+                    "auto-trace %s: %s",
+                    name,
+                    "ok" if result.get("success") else result.get("reason"),
+                )
                 self._after_auto_trace(name, result)  # [trace-retry patch]
                 sel = self._selected_repeater
                 if sel is not None and sel.display_name == name:
@@ -1246,7 +1295,9 @@ class AdminView(Gtk.Box):
         )
         logger.info("trace %s: %s", name, "ok" if result.get("success") else result.get("reason"))
         self._graph_page.refresh()  # [trace-log patch]
-        cb = getattr(self, "_on_trace_done", None)  # [repeater-tabs patch] Status shows the last trace
+        cb = getattr(
+            self, "_on_trace_done", None
+        )  # [repeater-tabs patch] Status shows the last trace
         if cb is not None:
             cb()
         with self._console_target(name):  # [console-history patch]
@@ -1271,7 +1322,9 @@ class AdminView(Gtk.Box):
     def _refresh_list(self) -> bool:
         peers = self._service.list_peers()
         logged_in = set(self._service.list_logged_in_repeaters())
-        repeaters = self._sort_admin_repeaters([p for p in peers if p.is_repeater], logged_in)  # [admin-sort patch]
+        repeaters = self._sort_admin_repeaters(
+            [p for p in peers if p.is_repeater], logged_in
+        )  # [admin-sort patch]
 
         # Suppress selection handler during rebuild
         self._refreshing_list = True
@@ -1365,7 +1418,9 @@ class AdminView(Gtk.Box):
         else:
             lines.append("SNR: n/a")
         if path:
-            lines.append(f"Route: {len(path)} hop{'s' if len(path) != 1 else ''} ({' \u2192 '.join(str(h).upper() for h in path)})")
+            lines.append(
+                f"Route: {len(path)} hop{'s' if len(path) != 1 else ''} ({' \u2192 '.join(str(h).upper() for h in path)})"
+            )
         elif path == [] and peer.last_advert_time is not None:
             lines.append("Route: direct")
         try:
@@ -1377,8 +1432,16 @@ class AdminView(Gtk.Box):
                 from meshcore_console.ui_gtk.views.peers import DISTANCE_IN_MILES
             except ImportError:
                 DISTANCE_IN_MILES = False
-            lines.append(f"Distance: {dist * 0.621371:.1f} mi" if DISTANCE_IN_MILES else f"Distance: {dist:.1f} km")
-        elif peer.latitude is None or peer.longitude is None or (peer.latitude == 0 and peer.longitude == 0):
+            lines.append(
+                f"Distance: {dist * 0.621371:.1f} mi"
+                if DISTANCE_IN_MILES
+                else f"Distance: {dist:.1f} km"
+            )
+        elif (
+            peer.latitude is None
+            or peer.longitude is None
+            or (peer.latitude == 0 and peer.longitude == 0)
+        ):
             lines.append("Distance: no location advertised")
         if logged_in:
             lines.append("Logged in")
@@ -1483,8 +1546,10 @@ class AdminView(Gtk.Box):
             return
         if self._busy:  # [login-queue patch] was silently ignored while a poll/auto-login ran
             name = self._selected_repeater.display_name
-            self._status_label.set_text("Login queued: waiting for the current background request "
-                                        "(stats poll or auto-login) to finish\u2026")
+            self._status_label.set_text(
+                "Login queued: waiting for the current background request "
+                "(stats poll or auto-login) to finish\u2026"
+            )
             self._queue_command(name, "login", lambda: self._do_login(password))
             return
         peer_name = self._selected_repeater.display_name
@@ -1509,7 +1574,9 @@ class AdminView(Gtk.Box):
                     and self._selected_repeater.display_name == peer_name
                 )
                 if error:
-                    self._append_for(peer_name, "error", f"Login failed: {error}")  # [console-history patch]
+                    self._append_for(
+                        peer_name, "error", f"Login failed: {error}"
+                    )  # [console-history patch]
                     if still_selected:
                         self._login_btn.set_sensitive(True)
                         self._guest_btn.set_sensitive(True)
@@ -1526,7 +1593,9 @@ class AdminView(Gtk.Box):
                         state = self._service.get_repeater_login_state(peer_name)
                         self._update_login_ui(state)
                         self._populate_status(self._selected_repeater)
-                    self._append_for(peer_name, "response", "Login successful")  # [console-history patch]
+                    self._append_for(
+                        peer_name, "response", "Login successful"
+                    )  # [console-history patch]
                     self._refresh_list()
                 return False
 
@@ -1551,7 +1620,9 @@ class AdminView(Gtk.Box):
             def done() -> bool:
                 self._busy = False
                 if error:
-                    self._append_for(peer_name, "error", f"Logout failed: {error}")  # [console-history patch]
+                    self._append_for(
+                        peer_name, "error", f"Logout failed: {error}"
+                    )  # [console-history patch]
                     self._logout_btn.set_sensitive(True)
                     return False
                 if self._selected_repeater and self._selected_repeater.display_name == peer_name:
@@ -1633,8 +1704,11 @@ class AdminView(Gtk.Box):
             return
         if not self._record_power(peer_name, reply.get("response_text") or ""):
             skip.add(peer_name)
-            logger.info("%s: no 'power' command (%r); not asking again this session",
-                        peer_name, (reply.get("response_text") or "")[:40])
+            logger.info(
+                "%s: no 'power' command (%r); not asking again this session",
+                peer_name,
+                (reply.get("response_text") or "")[:40],
+            )
 
     def _record_power(self, peer_name: str, text: str) -> bool:
         from meshcore_console.meshcore.repeater_stats import parse_power
@@ -1662,8 +1736,10 @@ class AdminView(Gtk.Box):
             return
         self._add_section_header("Hardware")
         if not boards and not firmware:
-            hint = Gtk.Label(label="Not reported yet. Run 'board' or 'ver' in Console (admin), "
-                                   "or 'owner' (any login).")
+            hint = Gtk.Label(
+                label="Not reported yet. Run 'board' or 'ver' in Console (admin), "
+                "or 'owner' (any login)."
+            )
             hint.add_css_class("panel-muted")
             hint.set_wrap(True)
             hint.set_xalign(0.0)
@@ -1678,8 +1754,10 @@ class AdminView(Gtk.Box):
             first, last = day(h["first"]), day(h["last"])
             return first if first == last else f"{first} \u2013 {last}"
 
-        for label, hist, source in (("Board:", boards, "'board'"),
-                                    ("Version:", firmware, "'ver' / owner info")):
+        for label, hist, source in (
+            ("Board:", boards, "'board'"),
+            ("Version:", firmware, "'ver' / owner info"),
+        ):
             if not hist:
                 continue
             cur = hist[0]
@@ -1757,10 +1835,17 @@ class AdminView(Gtk.Box):
         from meshcore_console.meshcore.repeater_stats import format_owner_info
 
         request = getattr(self._service, "request_repeater_owner_info", None)
-        result = request(peer_name) if request is not None else {"success": False, "reason": "not supported"}
+        result = (
+            request(peer_name)
+            if request is not None
+            else {"success": False, "reason": "not supported"}
+        )
         if result.get("success"):
-            return {"success": True, "response_text": format_owner_info(result),
-                    "firmware": result.get("firmware", "")}  # [board-history patch]
+            return {
+                "success": True,
+                "response_text": format_owner_info(result),
+                "firmware": result.get("firmware", ""),
+            }  # [board-history patch]
         state = self._service.get_repeater_login_state(peer_name)
         if state is None or not state.is_admin:
             return {
@@ -1774,7 +1859,8 @@ class AdminView(Gtk.Box):
             text = text[1:].strip() if text.startswith(">") else text
             lines = [line for line in text.split("|")] or ["(not set)"]
             fallback["response_text"] = "\n".join(
-                [f"Owner     {lines[0] or '(not set)'}"] + [f"          {line}" for line in lines[1:]]
+                [f"Owner     {lines[0] or '(not set)'}"]
+                + [f"          {line}" for line in lines[1:]]
             )
         return fallback
 
@@ -1800,7 +1886,12 @@ class AdminView(Gtk.Box):
             return self._service.send_repeater_command(peer_name, command)
         result = request(peer_name)
         if result.get("success"):
-            logger.info("neighbours of %s by request: %d of %d", peer_name, len(result.get("rows", [])), result.get("total", 0))
+            logger.info(
+                "neighbours of %s by request: %d of %d",
+                peer_name,
+                len(result.get("rows", [])),
+                result.get("total", 0),
+            )
             return {"success": True, "response_text": result["text"]}
         if not is_admin:
             return {
@@ -1808,7 +1899,11 @@ class AdminView(Gtk.Box):
                 "reason": f"Neighbour request: {result.get('reason', 'no response')}. A guest login can't use "
                 "the 'neighbors' command, and this repeater's firmware may be too old for the request.",
             }
-        logger.info("neighbours request to %s failed (%s); using the CLI command", peer_name, result.get("reason"))
+        logger.info(
+            "neighbours request to %s failed (%s); using the CLI command",
+            peer_name,
+            result.get("reason"),
+        )
         fallback = self._service.send_repeater_command(peer_name, command)
         if fallback.get("success"):
             cli_only.add(peer_name)
@@ -1820,12 +1915,15 @@ class AdminView(Gtk.Box):
         queue = getattr(self, "_cmd_queue", None)
         if queue is None:
             queue = self._cmd_queue = []
-        if any(p == peer_name and l == label for p, l, _r in queue):
+        if any(p == peer_name and lbl == label for p, lbl, _r in queue):
             return  # already waiting
         queue.append((peer_name, label, run))
         with self._console_target(peer_name):
-            self._append_console_lines(f"{label}: queued, waiting for the current request "
-                                       "(auto-login or stats poll) to finish\u2026", "panel-muted")
+            self._append_console_lines(
+                f"{label}: queued, waiting for the current request "
+                "(auto-login or stats poll) to finish\u2026",
+                "panel-muted",
+            )
         if not getattr(self, "_cmd_queue_tick", False):
             self._cmd_queue_tick = True
             GLib.timeout_add(300, self._drain_command_queue)
@@ -1840,15 +1938,18 @@ class AdminView(Gtk.Box):
         peer_name, label, run = queue.pop(0)
         sel = self._selected_repeater
         if sel is None or sel.display_name != peer_name:
-            self._append_for(peer_name, "error", f"{label}: not sent (another repeater was selected)")
+            self._append_for(
+                peer_name, "error", f"{label}: not sent (another repeater was selected)"
+            )
             return True
         run()
         return True
 
     def _send_command(self, command: str) -> None:
         if self._selected_repeater is not None and self._busy:  # [cmd-queue patch]
-            self._queue_command(self._selected_repeater.display_name, command,
-                                lambda: self._send_command(command))
+            self._queue_command(
+                self._selected_repeater.display_name, command, lambda: self._send_command(command)
+            )
             return
         if self._selected_repeater is None or self._busy:
             return
@@ -1876,11 +1977,9 @@ class AdminView(Gtk.Box):
             def done() -> bool:
                 self._busy = False
                 self._send_btn.set_sensitive(True)
-                still_selected = (
-                    self._selected_repeater is not None
-                    and self._selected_repeater.display_name == peer_name
-                )
-                with self._console_target(peer_name):  # [console-history patch] reply goes to its own console
+                with self._console_target(
+                    peer_name
+                ):  # [console-history patch] reply goes to its own console
                     if error:
                         self._append_console_error(f"Error: {error}")
                     elif not result.get("success"):
@@ -1889,7 +1988,9 @@ class AdminView(Gtk.Box):
                     else:
                         text = result.get("response_text", "")
                         self._note_reported(peer_name, command, result)  # [board-history patch]
-                        if text and self._append_neighbors_table(command, text):  # [neighbors patch]
+                        if text and self._append_neighbors_table(
+                            command, text
+                        ):  # [neighbors patch]
                             pass
                         elif text:
                             self._append_console_response(text)
@@ -1981,7 +2082,9 @@ class AdminView(Gtk.Box):
 
     def _append_for(self, peer_name: str, kind: str, text: str) -> None:
         with self._console_target(peer_name):
-            (self._append_console_response if kind == "response" else self._append_console_error)(text)
+            (self._append_console_response if kind == "response" else self._append_console_error)(
+                text
+            )
 
     def _trim_console(self, box: Gtk.Box) -> None:
         n = 0
@@ -2010,7 +2113,7 @@ class AdminView(Gtk.Box):
         # [console-lines patch] One label per line: GTK under-measured the height
         # of a single wrapping multi-line label here, so the scroll range ended
         # early and the last lines of e.g. the stats reply were clipped.
-        for line in (text.split("\n") or [""]):
+        for line in text.split("\n") or [""]:
             self._console_box.append(self._make_console_label(line or " ", css_class))
         self._scroll_console()
 
@@ -2072,7 +2175,10 @@ class AdminView(Gtk.Box):
         adj = self._console_scroll.get_vadjustment()
         logger.debug(
             "console autoscroll settled: value=%.0f upper=%.0f page=%.0f follow=%s",
-            adj.get_value(), adj.get_upper(), adj.get_page_size(), self._console_follow,
+            adj.get_value(),
+            adj.get_upper(),
+            adj.get_page_size(),
+            self._console_follow,
         )
         self._console_tick_id = 0
         return False
@@ -2126,7 +2232,12 @@ class AdminView(Gtk.Box):
             key = lambda p: (not p.is_favorite, p.display_name not in logged_in, name(p))  # noqa: E731
         elif mode == "distance":
             dist = self._admin_distances(repeaters)
-            key = lambda p: (not p.is_favorite, p.peer_id not in dist, dist.get(p.peer_id, 0.0), name(p))  # noqa: E731
+            key = lambda p: (  # noqa: E731
+                not p.is_favorite,
+                p.peer_id not in dist,
+                dist.get(p.peer_id, 0.0),
+                name(p),
+            )
         else:
             key = lambda p: (not p.is_favorite, name(p))  # noqa: E731
         return sorted(repeaters, key=key)
@@ -2149,8 +2260,11 @@ class AdminView(Gtk.Box):
             origin = None
         if origin is None:
             return {}
-        return {p.peer_id: _distance_km(origin, (p.latitude, p.longitude))
-                for p in repeaters if _has_location(p.latitude, p.longitude)}
+        return {
+            p.peer_id: _distance_km(origin, (p.latitude, p.longitude))
+            for p in repeaters
+            if _has_location(p.latitude, p.longitude)
+        }
 
     def _admin_sort_tip(self) -> str:
         label = ADMIN_SORT_LABELS[ADMIN_SORT_MODES.index(self._admin_sort)]
@@ -2170,14 +2284,22 @@ class AdminView(Gtk.Box):
         from meshcore_console.ui_gtk.compat import build_alert_dialog, present_dialog
 
         logged_in = set(self._service.list_logged_in_repeaters())
-        reps = [p for p in self._service.list_peers() if p.is_repeater and p.display_name not in logged_in]
+        reps = [
+            p
+            for p in self._service.list_peers()
+            if p.is_repeater and p.display_name not in logged_in
+        ]
         if not reps:
             return
         favs = sum(1 for p in reps if p.is_favorite)
-        body = (f"Removes {len(reps)} repeaters from the list (also from Peers and the Map). "
-                "They come back as their adverts are heard again.")
+        body = (
+            f"Removes {len(reps)} repeaters from the list (also from Peers and the Map). "
+            "They come back as their adverts are heard again."
+        )
         if logged_in:
-            body += f"\n\n{len(logged_in)} logged-in repeater{'s' if len(logged_in) != 1 else ''} stay."
+            body += (
+                f"\n\n{len(logged_in)} logged-in repeater{'s' if len(logged_in) != 1 else ''} stay."
+            )
         if favs:
             body += f"\n\n{favs} of them are favourites (\u2605)."
         dialog = build_alert_dialog(self.get_root(), "Clear repeaters?", body)
@@ -2205,7 +2327,9 @@ class AdminView(Gtk.Box):
                 removed += 1
         logger.info("UI: admin cleared %d repeaters", removed)
         sel = self._selected_repeater
-        if sel is not None and sel.display_name not in {p.display_name for p in self._service.list_peers()}:
+        if sel is not None and sel.display_name not in {
+            p.display_name for p in self._service.list_peers()
+        }:
             self._selected_repeater = None
             self._panel_stack.set_visible_child_name("empty")
         self._refresh_list()
@@ -2249,9 +2373,14 @@ class AdminView(Gtk.Box):
             self._repeater_list.unselect_all()
             return
         cur = self._selected_repeater
-        if (cur is not None and cur.display_name == peer.display_name
-                and self._panel_stack.get_visible_child_name() == "admin"):
-            self._selected_repeater = peer  # [status-live patch] heard again: signal, last seen, path
+        if (
+            cur is not None
+            and cur.display_name == peer.display_name
+            and self._panel_stack.get_visible_child_name() == "admin"
+        ):
+            self._selected_repeater = (
+                peer  # [status-live patch] heard again: signal, last seen, path
+            )
             self._populate_status(peer)
             self._update_admin_path(peer)
             return  # same repeater: keep a half-typed password or command

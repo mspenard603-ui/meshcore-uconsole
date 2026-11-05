@@ -35,15 +35,26 @@ def build_trace_view(
 ) -> Gtk.Widget:
     """The trace table (see _build_trace_view), with every cell selectable and a
     'Copy table' button that copies it as tab-separated text. [trace-copy patch]"""
-    widget = _build_trace_view(result, peers, target=target, self_label=self_label,
-                               spreading_factor=spreading_factor, css_class=css_class, compact=compact)
+    widget = _build_trace_view(
+        result,
+        peers,
+        target=target,
+        self_label=self_label,
+        spreading_factor=spreading_factor,
+        css_class=css_class,
+        compact=compact,
+    )
     if not result.get("success") or not result.get("links"):
         return widget  # nothing to copy from a failed trace [trace-copy patch]
-    text = trace_text(result, peers, target=target, self_label=self_label, spreading_factor=spreading_factor)
+    text = trace_text(
+        result, peers, target=target, self_label=self_label, spreading_factor=spreading_factor
+    )
     return _with_copy(widget, text)
 
 
-def trace_text(result: dict, peers: list, *, target: str, self_label: str, spreading_factor: int) -> str:
+def trace_text(
+    result: dict, peers: list, *, target: str, self_label: str, spreading_factor: int
+) -> str:
     """Plain-text trace: a heading line, then Leg/From/To/SNR/Margin, tab-separated."""
     if not result.get("success"):
         return f"Trace to {target} failed: {result.get('reason', 'no response')}"
@@ -67,7 +78,6 @@ def trace_text(result: dict, peers: list, *, target: str, self_label: str, sprea
     if note:
         lines.append(note)
     return "\n".join(lines)
-
 
 
 def _hop_label(peers: list, hop: str, self_label: str) -> tuple[str, list[str]]:
@@ -102,7 +112,11 @@ def _ambiguity_note(result: dict, peers: list, self_label: str) -> str:
                 notes.append(f"{hop} could also be {', '.join(others)}")
     if not notes:
         return ""
-    return "'?' = short hash shared by several nodes; the likeliest is shown. " + "; ".join(notes) + "."
+    return (
+        "'?' = short hash shared by several nodes; the likeliest is shown. "
+        + "; ".join(notes)
+        + "."
+    )
 
 
 def _with_copy(widget: Gtk.Widget, text: str) -> Gtk.Widget:
@@ -155,8 +169,9 @@ def _build_trace_view(
     narrow details panel does not have to widen. [compact-trace patch]
     """
     if compact:
-        return _build_compact(result, peers, target=target, self_label=self_label,
-                              spreading_factor=spreading_factor)
+        return _build_compact(
+            result, peers, target=target, self_label=self_label, spreading_factor=spreading_factor
+        )
     box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
 
     def label(text: str, *classes: str, align=Gtk.Align.START) -> Gtk.Label:
@@ -169,7 +184,9 @@ def _build_trace_view(
         return lab
 
     if not result.get("success"):
-        box.append(label(f"Trace to {target} failed: {result.get('reason', 'no response')}", "cli-error"))
+        box.append(
+            label(f"Trace to {target} failed: {result.get('reason', 'no response')}", "cli-error")
+        )
         return box
 
     def name(hop: str) -> str:
@@ -254,7 +271,9 @@ def _wrapped(text: str, *classes: str) -> Gtk.Label:
     return lab
 
 
-def _build_compact(result: dict, peers: list, *, target: str, self_label: str, spreading_factor: int) -> Gtk.Widget:
+def _build_compact(
+    result: dict, peers: list, *, target: str, self_label: str, spreading_factor: int
+) -> Gtk.Widget:
     _ensure_css()
     box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
     if not result.get("success"):
@@ -277,16 +296,26 @@ def _build_compact(result: dict, peers: list, *, target: str, self_label: str, s
         return _hop_label(peers, hop, self_label)[0]
 
     secs = (result.get("rtt_ms") or 0) / 1000
-    box.append(_wrapped(f"Round trip, {len(links)} links, {secs:.1f} s. SNR at the receiver; "
-                        f"margin over the SF{spreading_factor} limit ({limit:+.1f} dB).", "panel-muted"))
+    box.append(
+        _wrapped(
+            f"Round trip, {len(links)} links, {secs:.1f} s. SNR at the receiver; "
+            f"margin over the SF{spreading_factor} limit ({limit:+.1f} dB).",
+            "panel-muted",
+        )
+    )
     grid = Gtk.Grid(column_spacing=10, row_spacing=1)
     grid.add_css_class("trace-compact")
-    for col, (title, tip) in enumerate((
-        ("Link", "Transmitter \u2192 receiver, in round-trip order; hover for names"),
-        ("SNR", "Signal-to-noise as measured by the receiving node, dB"),
-        ("Margin", f"dB above the SF{spreading_factor} decode limit ({limit:+.1f} dB); "
-                   "amber under 5 dB, red below the limit"),
-    )):
+    for col, (title, tip) in enumerate(
+        (
+            ("Link", "Transmitter \u2192 receiver, in round-trip order; hover for names"),
+            ("SNR", "Signal-to-noise as measured by the receiving node, dB"),
+            (
+                "Margin",
+                f"dB above the SF{spreading_factor} decode limit ({limit:+.1f} dB); "
+                "amber under 5 dB, red below the limit",
+            ),
+        )
+    ):
         h = Gtk.Label(label=title)
         h.add_css_class("trace-compact-head")
         h.set_tooltip_text(tip)
@@ -295,9 +324,11 @@ def _build_compact(result: dict, peers: list, *, target: str, self_label: str, s
         grid.attach(h, col, 0, 1, 1)
     for row, link in enumerate(links, start=1):
         snr = link.get("snr")
-        cells = [f"{short(link['from'])}\u2192{short(link['to'])}",
-                 "n/a" if snr is None else f"{snr:+.1f}",
-                 "" if snr is None else f"{snr - limit:+.1f}"]
+        cells = [
+            f"{short(link['from'])}\u2192{short(link['to'])}",
+            "n/a" if snr is None else f"{snr:+.1f}",
+            "" if snr is None else f"{snr - limit:+.1f}",
+        ]
         tip = f"{row}. {name(link['from'])} \u2192 {name(link['to'])}"
         for hop in (link["from"], link["to"]):
             others = _hop_label(peers, hop, self_label)[1]
@@ -525,10 +556,16 @@ def _on_find_break(btn, service, hops: list[str], source: str) -> None:
             status.set_visible(True)
             if table is not None:
                 self_key = service.get_self_public_key() or ""
-                box.append(build_trace_view(
-                    table, service.list_peers(), target=name(len(table.get("_hops", []))),
-                    self_label=f"{service.get_status().node_id} ({self_key[:2].upper() or 'me'})",
-                    spreading_factor=service.get_settings().spreading_factor, compact=True))
+                box.append(
+                    build_trace_view(
+                        table,
+                        service.list_peers(),
+                        target=name(len(table.get("_hops", []))),
+                        self_label=f"{service.get_status().node_id} ({self_key[:2].upper() or 'me'})",
+                        spreading_factor=service.get_settings().spreading_factor,
+                        compact=True,
+                    )
+                )
             if final:
                 state["running"] = False
                 btn.set_label("Find the break")
@@ -549,7 +586,9 @@ def _on_find_break(btn, service, hops: list[str], source: str) -> None:
         while tries < BREAK_TRIES:
             if state["stop"]:
                 return None
-            post(f"Tracing out to {name(k)}, hop {k} of {len(hops)} (try {tries + 1} of {BREAK_TRIES})\u2026")
+            post(
+                f"Tracing out to {name(k)}, hop {k} of {len(hops)} (try {tries + 1} of {BREAK_TRIES})\u2026"
+            )
             with trace_source(source):
                 last = service.trace_hops(hops[:k])
             if last.get("busy"):  # another trace (e.g. auto-trace) is running: wait, don't count it
@@ -570,8 +609,12 @@ def _on_find_break(btn, service, hops: list[str], source: str) -> None:
             post("Stopped." if state["stop"] else "Radio not connected.", final=True)
             return
         if full.get("success"):
-            post(f"The whole route worked this time (out to {name(n)} and back): the failure was "
-                 "intermittent, not a dead link. Lossy links drop single traces.", final=True, table=full)
+            post(
+                f"The whole route worked this time (out to {name(n)} and back): the failure was "
+                "intermittent, not a dead link. Lossy links drop single traces.",
+                final=True,
+                table=full,
+            )
             return
         lo, hi, good = 0, n, None  # hop lo is reachable (0 = you), hop hi is not
         while hi - lo > 1:
@@ -585,12 +628,16 @@ def _on_find_break(btn, service, hops: list[str], source: str) -> None:
             else:
                 hi = mid
         if lo == 0:
-            text = (f"Break: the first link, between you and {name(1)}. Nothing came back even from "
-                    f"{name(1)} alone ({BREAK_TRIES} tries): it didn't hear you, or you didn't hear its reply.")
+            text = (
+                f"Break: the first link, between you and {name(1)}. Nothing came back even from "
+                f"{name(1)} alone ({BREAK_TRIES} tries): it didn't hear you, or you didn't hear its reply."
+            )
         else:
-            text = (f"Break: between {name(lo)} (hop {lo}) and {name(lo + 1)} (hop {lo + 1}). "
-                    f"Traces out to {name(lo)} come back; one hop further they don't ({BREAK_TRIES} tries), "
-                    "so that link fails in one direction or the other. SNR up to the break:")
+            text = (
+                f"Break: between {name(lo)} (hop {lo}) and {name(lo + 1)} (hop {lo + 1}). "
+                f"Traces out to {name(lo)} come back; one hop further they don't ({BREAK_TRIES} tries), "
+                "so that link fails in one direction or the other. SNR up to the break:"
+            )
         post(text, final=True, table=good)
 
     threading.Thread(target=work, daemon=True).start()

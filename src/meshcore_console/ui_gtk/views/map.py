@@ -55,7 +55,9 @@ def _marker_hash_css() -> None:  # [marker-hash patch]
         b".map-marker-hash { font-family: 'DejaVu Sans Mono', monospace; font-size: 11px; font-weight: 700;"
         b" color: #ffe880; background: rgba(160, 120, 40, 0.92); border-radius: 3px; padding: 0 4px; }"
     )
-    Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+    Gtk.StyleContext.add_provider_for_display(
+        Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+    )
     _HASH_CSS["done"] = True
 
 
@@ -170,7 +172,9 @@ class MapView(Gtk.Box):
         self._details_panel.set_visible(False)
         self.append(self._details_panel)
         if getattr(self, "_split_btn", None) is not None:  # [panel-split fix]
-            self._details_panel.connect("notify::visible", lambda p, _s: self._split_btn.set_visible(p.get_visible()))
+            self._details_panel.connect(
+                "notify::visible", lambda p, _s: self._split_btn.set_visible(p.get_visible())
+            )
 
         self._details_title = Gtk.Label(label="")
         self._details_title.add_css_class("panel-title")
@@ -284,7 +288,9 @@ class MapView(Gtk.Box):
         from gi.repository import Gdk
 
         css = Gtk.CssProvider()
-        css.load_from_data(b".map-split-toggle label { font-size: 22px; font-weight: 800; color: #e7eef8; }")
+        css.load_from_data(
+            b".map-split-toggle label { font-size: 22px; font-weight: 800; color: #e7eef8; }"
+        )
         Gtk.StyleContext.add_provider_for_display(
             Gdk.Display.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1
         )
@@ -303,7 +309,8 @@ class MapView(Gtk.Box):
         self._panel_wide = not getattr(self, "_panel_wide", False)
         btn.set_label("\u21e5" if self._panel_wide else "\u21e4")  # [panel-split symbol]
         btn.set_tooltip_text(
-            "Give the map two thirds of the width" if self._panel_wide
+            "Give the map two thirds of the width"
+            if self._panel_wide
             else "Give the details panel two thirds of the width"
         )
         self._apply_split()
@@ -517,7 +524,9 @@ class MapView(Gtk.Box):
 
         # Store peer reference for click handling
         setattr(marker, "_peer", peer)
-        setattr(marker, "_kind", (peer.is_repeater, getattr(peer, "node_type", None)))  # [room-marker patch]
+        setattr(
+            marker, "_kind", (peer.is_repeater, getattr(peer, "node_type", None))
+        )  # [room-marker patch]
 
         # Make marker clickable
         click = Gtk.GestureClick.new()
@@ -664,7 +673,9 @@ class MapView(Gtk.Box):
         if root is not None:
             seq = getattr(root, "_map_selected", (None, 0))[1] + 1
             root._map_selected = (peer.peer_id, seq)
-        self._details_title.set_wrap(True)  # [marker-hash patch] long names wrap, never widen the panel
+        self._details_title.set_wrap(
+            True
+        )  # [marker-hash patch] long names wrap, never widen the panel
         self._details_title.set_max_width_chars(26)
         self._details_title.set_xalign(0.0)
         if peer.is_repeater and peer.public_key:  # ID hash next to the name, as on the marker
@@ -675,8 +686,12 @@ class MapView(Gtk.Box):
             )
 
         # Type badge
-        _room = getattr(peer, "node_type", None) == 3 and not peer.is_repeater  # [room-marker patch]
-        type_label = Gtk.Label(label="Repeater" if peer.is_repeater else ("Room server" if _room else "Contact"))
+        _room = (
+            getattr(peer, "node_type", None) == 3 and not peer.is_repeater
+        )  # [room-marker patch]
+        type_label = Gtk.Label(
+            label="Repeater" if peer.is_repeater else ("Room server" if _room else "Contact")
+        )
         type_label.add_css_class("status-pill")
         type_label.add_css_class("warn" if peer.is_repeater else ("room" if _room else "ok"))
         type_label.set_halign(Gtk.Align.START)
@@ -696,11 +711,23 @@ class MapView(Gtk.Box):
         path = PathVisualization(
             hops=hops,
             peers=self._service.list_peers(),
-            start=((self_key or "")[:2].upper() or "Me", self._service.get_status().node_id, None, STYLE_SELF),
-            end=((peer.public_key or peer.display_name)[:2].upper(), peer.display_name, peer, STYLE_DEFAULT),
+            start=(
+                (self_key or "")[:2].upper() or "Me",
+                self._service.get_status().node_id,
+                None,
+                STYLE_SELF,
+            ),
+            end=(
+                (peer.public_key or peer.display_name)[:2].upper(),
+                peer.display_name,
+                peer,
+                STYLE_DEFAULT,
+            ),
         )
         path.set_tooltip_text(
-            "Direct (heard with no hops)" if not hops else f"{len(hops)} hop{'s' if len(hops) != 1 else ''}"
+            "Direct (heard with no hops)"
+            if not hops
+            else f"{len(hops)} hop{'s' if len(hops) != 1 else ''}"
         )
         path.set_min_children_per_line(min(len(hops) + 2, 6))  # one row, as in the Admin header
         self._details_content.append(path)
@@ -773,14 +800,18 @@ class MapView(Gtk.Box):
 
     def _clear_details(self) -> None:
         """Clear the details content area."""
-        clear_children(self._details_content)  # [plot-path patch] line stays until Plot path is toggled off
+        clear_children(
+            self._details_content
+        )  # [plot-path patch] line stays until Plot path is toggled off
 
         # Also remove close button if present
         child = self._details_panel.get_first_child()
         while child is not None:
             next_child = child.get_next_sibling()
-            if child != self._details_title and child != self._details_content and child is not getattr(
-                self, "_details_scroll", None
+            if (
+                child != self._details_title
+                and child != self._details_content
+                and child is not getattr(self, "_details_scroll", None)
             ):  # [panel-split patch]
                 self._details_panel.remove(child)
             child = next_child
@@ -789,7 +820,9 @@ class MapView(Gtk.Box):
         """Close the details panel if open. Returns True if something was closed."""
         if hasattr(self, "_details_panel") and self._details_panel.get_visible():
             self._selected_peer = None
-            self._details_panel.set_visible(False)  # [plot-path patch] line stays until Plot path is toggled off
+            self._details_panel.set_visible(
+                False
+            )  # [plot-path patch] line stays until Plot path is toggled off
             return True
         return False
 
@@ -842,32 +875,47 @@ class MapView(Gtk.Box):
         for hop in list(peer.last_path or []):
             h = str(hop).lower()
             located = [
-                p for p in peers
-                if p.public_key and p.public_key.lower().startswith(h)
-                and p.latitude is not None and p.longitude is not None
+                p
+                for p in peers
+                if p.public_key
+                and p.public_key.lower().startswith(h)
+                and p.latitude is not None
+                and p.longitude is not None
             ]
             located = [p for p in located if p.is_repeater] or located
             prev = next(((la, lo) for _i, la, lo in reversed(nodes) if la is not None), None)
             if len(located) > 1 and prev is not None:
-                located.sort(key=lambda p: (p.latitude - prev[0]) ** 2 + (p.longitude - prev[1]) ** 2)
-            nodes.append((str(hop), located[0].latitude, located[0].longitude) if located else (str(hop), None, None))
+                located.sort(
+                    key=lambda p: (p.latitude - prev[0]) ** 2 + (p.longitude - prev[1]) ** 2
+                )
+            nodes.append(
+                (str(hop), located[0].latitude, located[0].longitude)
+                if located
+                else (str(hop), None, None)
+            )
         nodes.append((peer.public_key or peer.peer_id, peer.latitude, peer.longitude))
         return nodes
 
     def _latest_trace(self, peer: Peer) -> dict | None:
         import time as _time
 
-        store = self._service.get_repeater_samples() if hasattr(self._service, "get_repeater_samples") else None
+        store = (
+            self._service.get_repeater_samples()
+            if hasattr(self._service, "get_repeater_samples")
+            else None
+        )
         if store is None or not hasattr(store, "trace_series") or not peer.public_key:
             return None
         ok = [t for t in store.trace_series(peer.public_key, _time.time() - 30 * 86400) if t["ok"]]
         if not ok:
             return None
         last = ok[-1]
-        links = [{"from": l[0], "to": l[1], "snr": l[2]} for l in last["links"]]
+        links = [{"from": lk[0], "to": lk[1], "snr": lk[2]} for lk in last["links"]]
         return {"success": True, "links": links, "t": last["t"]}
 
-    def _add_snr_bubbles(self, peer: Peer, result: dict | None = None, notes: Gtk.Box | None = None) -> None:
+    def _add_snr_bubbles(
+        self, peer: Peer, result: dict | None = None, notes: Gtk.Box | None = None
+    ) -> None:
         import math
         from datetime import datetime
 
@@ -932,17 +980,24 @@ class MapView(Gtk.Box):
                     continue
                 missing_links += 1  # [path-snr patch] not in that trace: show n/a, don't hide it
             (xa, ya), (xb, yb) = merc(la, loa), merc(lb, lob)
-            sector = int(round(math.degrees(math.atan2(yb - ya, xb - xa)) / 45.0)) % 8  # screen y points down
+            sector = (
+                int(round(math.degrees(math.atan2(yb - ya, xb - xa)) / 45.0)) % 8
+            )  # screen y points down
             mx, my = (xa + xb) / 2, (ya + yb) / 2
             mid_lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * my))))
             box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
             box.add_css_class("route-snr-bubble")
             box.append(line(self._ARROWS[sector], out))
             box.append(line(self._ARROWS[(sector + 4) % 8], back))
-            name = lambda i: "you" if i == "me" else str(i)[:4].upper()
+
+            def name(i: object) -> str:
+                return "you" if i == "me" else str(i)[:4].upper()
+
             box.set_tooltip_text(
-                f"{name(ida)} \u2192 {name(idb)}: " + (f"{out:+.2f} dB" if out is not None else "n/a")
-                + f"\n{name(idb)} \u2192 {name(ida)}: " + (f"{back:+.2f} dB" if back is not None else "n/a")
+                f"{name(ida)} \u2192 {name(idb)}: "
+                + (f"{out:+.2f} dB" if out is not None else "n/a")
+                + f"\n{name(idb)} \u2192 {name(ida)}: "
+                + (f"{back:+.2f} dB" if back is not None else "n/a")
                 + f"\nSNR as measured by the receiving node (decode limit {limit:+.1f} dB)"
             )
             marker = Shumate.Marker.new()
@@ -965,9 +1020,11 @@ class MapView(Gtk.Box):
             when = datetime.fromtimestamp(result["t"])
             text = f"Link SNR on the map from the trace at {when.strftime('%H:%M' if when.date() == datetime.now().date() else '%b %-d %H:%M')}."
         if missing_links:  # [path-snr patch]
-            text += (f" {missing_links} link{'s' if missing_links != 1 else ''} on the plot "
-                     f"{'are' if missing_links != 1 else 'is'} not in that trace (the path has changed "
-                     "since): press Trace path to measure the current path.")
+            text += (
+                f" {missing_links} link{'s' if missing_links != 1 else ''} on the plot "
+                f"{'are' if missing_links != 1 else 'is'} not in that trace (the path has changed "
+                "since): press Trace path to measure the current path."
+            )
         note = getattr(self, "_snr_note", None)
         if notes is not None:
             note = Gtk.Label(label=text)
@@ -993,15 +1050,20 @@ class MapView(Gtk.Box):
         for hop in list(peer.last_path or []):
             h = str(hop).lower()
             matches = [
-                p for p in peers
-                if p.public_key and p.public_key.lower().startswith(h)
-                and p.latitude is not None and p.longitude is not None
+                p
+                for p in peers
+                if p.public_key
+                and p.public_key.lower().startswith(h)
+                and p.latitude is not None
+                and p.longitude is not None
             ]
             repeaters = [p for p in matches if p.is_repeater] or matches
             if not repeaters:
                 missing.append(str(hop).upper())
                 continue
-            if len(repeaters) > 1 and points:  # short hash shared by several: nearest to previous node
+            if (
+                len(repeaters) > 1 and points
+            ):  # short hash shared by several: nearest to previous node
                 plat, plon = points[-1]
                 repeaters.sort(key=lambda p: (p.latitude - plat) ** 2 + (p.longitude - plon) ** 2)
             points.append((repeaters[0].latitude, repeaters[0].longitude))
@@ -1017,7 +1079,9 @@ class MapView(Gtk.Box):
         self._clear_route_line()
         points, missing = self._route_points(peer)
         if len(points) < 2:
-            note = Gtk.Label(label="Path not drawn on the map: fewer than two nodes have a known position.")
+            note = Gtk.Label(
+                label="Path not drawn on the map: fewer than two nodes have a known position."
+            )
         else:
             layer = Shumate.PathLayer.new(self._viewport)
             rgba = Gdk.RGBA()
@@ -1051,7 +1115,11 @@ class MapView(Gtk.Box):
             self._route_layer = layer
             self._add_snr_bubbles(peer, notes=results)  # [path-snr patch]
             self._fit_route(points)
-            note = Gtk.Label(label=f"Skipped on the map (position unknown): {', '.join(missing)}") if missing else None
+            note = (
+                Gtk.Label(label=f"Skipped on the map (position unknown): {', '.join(missing)}")
+                if missing
+                else None
+            )
         if note is not None:
             note.add_css_class("panel-muted")
             note.set_wrap(True)
@@ -1108,12 +1176,19 @@ class MapView(Gtk.Box):
         favorite = not peer.is_favorite  # decide first: the service may update this same object
         self._service.set_favorite(peer_id, favorite)
         btn.set_label("\u2605 Unfavorite" if favorite else "\u2606 Favorite")
-        btn.set_tooltip_text("Remove from favourites" if favorite else "Add to favourites (Peers, Admin)")
+        btn.set_tooltip_text(
+            "Remove from favourites" if favorite else "Add to favourites (Peers, Admin)"
+        )
 
-    def _on_plot_path_clicked(self, btn: Gtk.Button, peer: Peer, notes: Gtk.Box) -> None:  # [plot-path patch]
+    def _on_plot_path_clicked(
+        self, btn: Gtk.Button, peer: Peer, notes: Gtk.Box
+    ) -> None:  # [plot-path patch]
         """Toggle the dashed network-path line for this repeater."""
         clear_children(notes)
-        if getattr(self, "_route_layer", None) is not None and getattr(self, "_route_peer_id", None) == peer.peer_id:
+        if (
+            getattr(self, "_route_layer", None) is not None
+            and getattr(self, "_route_peer_id", None) == peer.peer_id
+        ):
             self._clear_route_line()
             btn.set_label("Plot path")
             return
@@ -1126,12 +1201,17 @@ class MapView(Gtk.Box):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         btn = Gtk.Button(label="Trace path")
         btn.set_halign(Gtk.Align.START)
-        btn.set_tooltip_text("Send a round-trip TRACE along this path: SNR for every link, both ways")
+        btn.set_tooltip_text(
+            "Send a round-trip TRACE along this path: SNR for every link, both ways"
+        )
         results = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         btn.connect("clicked", self._on_map_trace_clicked, peer, results)
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)  # [plot-path patch]
         plot = Gtk.Button(label="Plot path")
-        if getattr(self, "_route_layer", None) is not None and getattr(self, "_route_peer_id", None) == peer.peer_id:
+        if (
+            getattr(self, "_route_layer", None) is not None
+            and getattr(self, "_route_peer_id", None) == peer.peer_id
+        ):
             plot.set_label("Hide path")  # [plot-path patch] its line is still on the map
         plot.set_tooltip_text("Draw this repeater's network path on the map as a dashed line")
         notes = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -1140,18 +1220,31 @@ class MapView(Gtk.Box):
         row.append(plot)
         row.append(btn)
         box.append(row)
-        fav = Gtk.Button(label="\u2605 Unfavorite" if peer.is_favorite else "\u2606 Favorite")  # [map-fav patch]
-        fav.set_tooltip_text("Remove from favourites" if peer.is_favorite else "Add to favourites (Peers, Admin)")
+        fav = Gtk.Button(
+            label="\u2605 Unfavorite" if peer.is_favorite else "\u2606 Favorite"
+        )  # [map-fav patch]
+        fav.set_tooltip_text(
+            "Remove from favourites" if peer.is_favorite else "Add to favourites (Peers, Admin)"
+        )
         fav.add_css_class("map-fav-btn")
         fav.connect("clicked", self._on_map_fav_clicked, peer.peer_id)
         fav.set_halign(Gtk.Align.START)
         box.append(fav)  # own row: the panel is narrow
         box.append(notes)
-        if getattr(self, "_route_layer", None) is not None and getattr(self, "_route_peer_id", None) == peer.peer_id:
+        if (
+            getattr(self, "_route_layer", None) is not None
+            and getattr(self, "_route_peer_id", None) == peer.peer_id
+        ):
             self._add_snr_bubbles(peer, notes=notes)  # [path-snr patch] note back; newest trace
-        elif getattr(self, "_route_layer", None) is not None:  # [path-owner patch] say whose line it is
+        elif (
+            getattr(self, "_route_layer", None) is not None
+        ):  # [path-owner patch] say whose line it is
             owner = next(
-                (p.display_name for p in self._service.list_peers() if p.peer_id == getattr(self, "_route_peer_id", None)),
+                (
+                    p.display_name
+                    for p in self._service.list_peers()
+                    if p.peer_id == getattr(self, "_route_peer_id", None)
+                ),
                 "another repeater",
             )
             hint = Gtk.Label(
@@ -1193,7 +1286,9 @@ class MapView(Gtk.Box):
                 ):
                     self._add_snr_bubbles(peer, result=result)
                 elif result.get("success") and getattr(self, "_route_layer", None) is not None:
-                    self._switch_route_to(peer, result)  # [path-owner patch] line was another repeater's
+                    self._switch_route_to(
+                        peer, result
+                    )  # [path-owner patch] line was another repeater's
                 if self._selected_peer is None or self._selected_peer.peer_id != peer.peer_id:
                     return False  # panel now shows another node
                 self_key = self._service.get_self_public_key() or ""
@@ -1288,7 +1383,9 @@ class MapView(Gtk.Box):
     def _on_close_details(self, _button: Gtk.Button) -> None:
         """Close the details panel."""
         self._selected_peer = None
-        self._details_panel.set_visible(False)  # [plot-path patch] line stays until Plot path is toggled off
+        self._details_panel.set_visible(
+            False
+        )  # [plot-path patch] line stays until Plot path is toggled off
 
     def _on_send_message_clicked(self, _button: Gtk.Button, peer: Peer) -> None:
         """Navigate to messages view and start a conversation with this peer."""

@@ -47,7 +47,9 @@ def _ensure_css() -> None:
         return
     provider = Gtk.CssProvider()
     provider.load_from_data(_CSS)
-    Gtk.StyleContext.add_provider_for_display(display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+    Gtk.StyleContext.add_provider_for_display(
+        display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+    )
     _css_done = True
 
 
@@ -75,8 +77,14 @@ class RoomPanel(Gtk.Box):
         self.password = Gtk.PasswordEntry()
         self.password.set_show_peek_icon(True)
         self.password.set_hexpand(True)
-        self.password.set_property("placeholder-text", "Room password (blank = read-only, if the room allows it)")
-        saved = service.get_saved_repeater_password(self.room_name) if hasattr(service, "get_saved_repeater_password") else None
+        self.password.set_property(
+            "placeholder-text", "Room password (blank = read-only, if the room allows it)"
+        )
+        saved = (
+            service.get_saved_repeater_password(self.room_name)
+            if hasattr(service, "get_saved_repeater_password")
+            else None
+        )
         if saved:
             self.password.set_text(saved)
         self.password.connect("activate", _on_login)
@@ -124,18 +132,30 @@ class RoomPanel(Gtk.Box):
 
     # --- display -------------------------------------------------------------
     def refresh_status(self) -> None:
-        state = self._service.get_room_login_state(self.room_name) if hasattr(self._service, "get_room_login_state") else None
+        state = (
+            self._service.get_room_login_state(self.room_name)
+            if hasattr(self._service, "get_room_login_state")
+            else None
+        )
         if state:
             when = time.strftime("%H:%M", time.localtime(state["time"]))
-            self.status.set_text(f"Logged in at {when} ({state['role']}). New posts arrive as the room pushes them.")
+            self.status.set_text(
+                f"Logged in at {when} ({state['role']}). New posts arrive as the room pushes them."
+            )
             self.login_btn.set_label("Log in again")
         else:
-            self.status.set_text("Not logged in this session. Log in to receive the room's posts; "
-                                 "posts already received are shown below.")
+            self.status.set_text(
+                "Not logged in this session. Log in to receive the room's posts; "
+                "posts already received are shown below."
+            )
             self.login_btn.set_label("Log in")
 
     def refresh_posts(self) -> None:
-        posts = self._service.list_room_posts(self.room_name) if hasattr(self._service, "list_room_posts") else []
+        posts = (
+            self._service.list_room_posts(self.room_name)
+            if hasattr(self._service, "list_room_posts")
+            else []
+        )
         # [chat-100 patch] the list is capped at 200: a new post keeps the count the
         # same, so compare the newest post too
         key = (len(posts), posts[-1].message_id if posts else None)
@@ -228,7 +248,11 @@ def _on_login(widget) -> None:
             else:
                 p.refresh_status()
                 reason = result.get("reason", "no reply")
-                hint = " (wrong password, or the room doesn't allow read-only guests)" if "timeout" in reason.lower() else ""
+                hint = (
+                    " (wrong password, or the room doesn't allow read-only guests)"
+                    if "timeout" in reason.lower()
+                    else ""
+                )
                 p.status.set_text(f"Login failed: {reason}{hint}.")
             return False
 

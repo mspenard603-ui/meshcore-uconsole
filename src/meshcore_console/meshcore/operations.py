@@ -52,8 +52,10 @@ def _forget_route(node: MeshNodeProtocol, peer_name: str) -> None:
     teaches a working route (the MeshCore apps reset paths the same way)."""
     contacts = node.contacts
     contact = contacts.get_by_name(peer_name) if contacts is not None else None
-    if contact is not None and getattr(contact, "out_path_len", -1) > 0 and (
-        contact.out_path_len & 0x3F
+    if (
+        contact is not None
+        and getattr(contact, "out_path_len", -1) > 0
+        and (contact.out_path_len & 0x3F)
     ):
         contact.out_path = []
         contact.out_path_len = -1
@@ -148,7 +150,6 @@ async def request_telemetry(
         want_environment=False,
     )
 
-    contact_hash = bytes.fromhex(contact.public_key)[0]
     response_handler = node.dispatcher.protocol_response_handler
 
     response_event = asyncio.Event()
@@ -215,7 +216,9 @@ async def send_login(
     if lock is None:
         lock = _LOGIN_LOCKS[id(loop)] = asyncio.Lock()
     async with lock:
-        return await _send_login_unlocked(node=node, peer_name=peer_name, password=password, timeout=timeout)
+        return await _send_login_unlocked(
+            node=node, peer_name=peer_name, password=password, timeout=timeout
+        )
 
 
 async def _send_login_unlocked(

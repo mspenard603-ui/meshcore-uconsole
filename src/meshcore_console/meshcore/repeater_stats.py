@@ -151,7 +151,17 @@ class RepeaterSampleStore:
                 "GROUP BY CAST(ts / ? AS INTEGER) ORDER BY 1",
                 (pubkey.lower(), kind, since, bucket_s),
             ).fetchall()
-        keys = ("t", "rssi", "rssi_min", "rssi_max", "snr", "snr_min", "snr_max", "noise_floor", "n")
+        keys = (
+            "t",
+            "rssi",
+            "rssi_min",
+            "rssi_max",
+            "snr",
+            "snr_min",
+            "snr_max",
+            "noise_floor",
+            "n",
+        )
         return [dict(zip(keys, r)) for r in rows]
 
     def latest(self, pubkey: str, kind: str) -> dict | None:
@@ -163,7 +173,13 @@ class RepeaterSampleStore:
             ).fetchone()
         if row is None:
             return None
-        out = {"ts": row[0], "rssi": row[1], "snr": row[2], "noise_floor": row[3], "batt_mv": row[4]}
+        out = {
+            "ts": row[0],
+            "rssi": row[1],
+            "snr": row[2],
+            "noise_floor": row[3],
+            "batt_mv": row[4],
+        }
         if row[5]:
             try:
                 out.update(json.loads(row[5]))
@@ -267,8 +283,9 @@ class RepeaterSampleStore:
     # login, so the room only pushes posts we don't have yet.
     def room_sync(self, pubkey: str) -> int:
         with self._lock:
-            row = self._conn.execute("SELECT sync_since FROM room_sync WHERE pubkey = ?",
-                                     (pubkey.lower(),)).fetchone()
+            row = self._conn.execute(
+                "SELECT sync_since FROM room_sync WHERE pubkey = ?", (pubkey.lower(),)
+            ).fetchone()
         return int(row[0]) if row else 0
 
     def set_room_sync(self, pubkey: str, ts: int) -> None:
@@ -309,13 +326,18 @@ class RepeaterSampleStore:
 
     # -- round-trip traces [trace-log patch] ---------------------------------
     def add_trace(
-        self, pubkey: str, result: dict, *, sf: int | None = None, ts: float | None = None,
+        self,
+        pubkey: str,
+        result: dict,
+        *,
+        sf: int | None = None,
+        ts: float | None = None,
         source: str | None = None,
     ) -> None:
         """Log one trace. *result* is run_trace()'s dict (success, links, rtt_ms, reason)."""
         now = time.time()
         ok = bool(result.get("success"))
-        links = [[l.get("from"), l.get("to"), l.get("snr")] for l in result.get("links") or []]
+        links = [[lk.get("from"), lk.get("to"), lk.get("snr")] for lk in result.get("links") or []]
         with self._lock:
             self._conn.execute(
                 "INSERT INTO repeater_traces (pubkey, ts, ok, sf, rtt_ms, links, reason, source) "
@@ -350,8 +372,17 @@ class RepeaterSampleStore:
                 parsed = json.loads(links) if links else []
             except ValueError:
                 parsed = []
-            out.append({"t": ts, "ok": bool(ok), "sf": sf, "rtt_ms": rtt, "links": parsed, "reason": reason,
-                        "source": source})
+            out.append(
+                {
+                    "t": ts,
+                    "ok": bool(ok),
+                    "sf": sf,
+                    "rtt_ms": rtt,
+                    "links": parsed,
+                    "reason": reason,
+                    "source": source,
+                }
+            )
         return out
 
     def summary(self, pubkey: str, kind: str, since: float) -> dict:
@@ -420,8 +451,10 @@ def _forget_route(node: Any, contact_name: str) -> None:
     """After a timeout over a multi-hop route, clear it so the next request floods."""
     contacts = getattr(node, "contacts", None)
     contact = contacts.get_by_name(contact_name) if contacts is not None else None
-    if contact is not None and getattr(contact, "out_path_len", -1) > 0 and (
-        contact.out_path_len & 0x3F
+    if (
+        contact is not None
+        and getattr(contact, "out_path_len", -1) > 0
+        and (contact.out_path_len & 0x3F)
     ):
         contact.out_path = []
         contact.out_path_len = -1
@@ -435,9 +468,7 @@ async def request_status(*, node: Any, contact_name: str, timeout: float = 10.0)
     from meshcore_console.meshcore.operations import _resolve_contact
 
     contact = _resolve_contact(node, contact_name)
-    pkt, tag = PacketBuilder.create_protocol_request(
-        contact, node.identity, REQ_TYPE_GET_STATUS
-    )
+    pkt, tag = PacketBuilder.create_protocol_request(contact, node.identity, REQ_TYPE_GET_STATUS)
     handler = node.dispatcher.protocol_response_handler
     event = asyncio.Event()
     result: dict = {}
@@ -527,7 +558,14 @@ def parse_power(text: str) -> dict | None:
         src = "battery"
     else:
         src = "unknown"
-    return {"batt_mv": int(mv), "usb": usb, "solar": solar, "ext": ext, "charger": charger, "src": src}
+    return {
+        "batt_mv": int(mv),
+        "usb": usb,
+        "solar": solar,
+        "ext": ext,
+        "charger": charger,
+        "src": src,
+    }
 
 
 # -- Neighbour list by request [neighbours-request patch] -------------------------
@@ -625,7 +663,9 @@ async def request_neighbours(
     total = 0
     t0 = time.monotonic()
     for page in range(max_pages):
-        data = bytes([0, 255, len(rows) & 0xFF, len(rows) >> 8, NEIGHBOURS_NEWEST_FIRST, prefix_len])
+        data = bytes(
+            [0, 255, len(rows) & 0xFF, len(rows) >> 8, NEIGHBOURS_NEWEST_FIRST, prefix_len]
+        )
         pkt, tag = PacketBuilder.create_protocol_request(
             contact, node.identity, REQ_TYPE_GET_NEIGHBOURS, data + os.urandom(4)
         )
@@ -710,6 +750,10 @@ async def request_owner_info(*, node: Any, contact_name: str, timeout: float = 1
 def format_owner_info(info: dict) -> str:
     owner = info.get("owner") or "(not set)"
     lines = owner.splitlines() or [owner]
-    out = [f"Name      {info.get('name') or '?'}", f"Firmware  {info.get('firmware') or '?'}", f"Owner     {lines[0]}"]
+    out = [
+        f"Name      {info.get('name') or '?'}",
+        f"Firmware  {info.get('firmware') or '?'}",
+        f"Owner     {lines[0]}",
+    ]
     out += [f"          {line}" for line in lines[1:]]
     return "\n".join(out)

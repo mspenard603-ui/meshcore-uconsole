@@ -28,7 +28,9 @@ def _logo_image() -> "Gtk.Image | None":
             from gi.repository import Gdk
 
             display = Gdk.Display.get_default()
-            if display is None or not Gtk.IconTheme.get_for_display(display).has_icon("meshcore-console"):
+            if display is None or not Gtk.IconTheme.get_for_display(display).has_icon(
+                "meshcore-console"
+            ):
                 return None
             image = Gtk.Image.new_from_icon_name("meshcore-console")
         image.set_pixel_size(LOGO_SIZE)
