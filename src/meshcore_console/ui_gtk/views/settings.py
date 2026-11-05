@@ -36,6 +36,70 @@ def _abbreviate_key(key: str | None) -> str:
     return f"{key[:8]}...{key[-8:]}"
 
 
+# --- [settings-guard patch] ----------------------------------------------------
+_RADIO_FIELDS = (
+    ("frequency", "Frequency", lambda v: f"{v / 1_000_000:.3f} MHz"),
+    ("bandwidth", "Bandwidth", lambda v: f"{v / 1000:g} kHz"),
+    ("spreading_factor", "Spreading factor", lambda v: f"SF{v}"),
+    ("coding_rate", "Coding rate", lambda v: f"4/{v}"),
+    ("tx_power", "TX power", lambda v: f"{v} dBm"),
+    ("preamble_length", "Preamble", str),
+    ("path_hash_mode", "Path hash", lambda v: f"{int(v) + 1}-byte"),
+    ("hardware_preset", "Hardware preset", str),
+    ("en_pins", "Enable pins", lambda v: v or "none"),
+    ("reset_pin", "Reset pin", str), ("busy_pin", "Busy pin", str), ("irq_pin", "IRQ pin", str),
+    ("txen_pin", "TXEN pin", str), ("rxen_pin", "RXEN pin", str),
+    ("use_dio2_rf", "DIO2 RF switch", str), ("use_dio3_tcxo", "DIO3 TCXO", str),
+)
+
+
+def _radio_changes(old, new) -> list[str]:
+    """'Frequency: 910.525 MHz \u2192 869.525 MHz' for each radio/hardware field that differs."""
+    out = []
+    for key, label, fmt in _RADIO_FIELDS:
+        a, b = getattr(old, key, None), getattr(new, key, None)
+        if a != b:
+            try:
+                out.append(f"{label}: {fmt(a)} \u2192 {fmt(b)}")
+            except Exception:  # noqa: BLE001
+                out.append(f"{label}: {a} \u2192 {b}")
+    return out
+
+
+def _scroll_page_instead(ctrl, _dx, dy):
+    """Capture-phase scroll on a dropdown: scroll the page, swallow the event."""
+    widget = ctrl.get_widget()
+    page = widget.get_ancestor(Gtk.ScrolledWindow) if widget is not None else None
+    if page is not None:
+        adj = page.get_vadjustment()
+        adj.set_value(adj.get_value() + dy * 48)
+    return True
+
+
+def _settings_escape(ctrl, keyval, _code, _state) -> bool:  # [settings-close patch]
+    from gi.repository import Gdk
+
+    if keyval != Gdk.KEY_Escape:
+        return False
+    view = ctrl.get_widget()
+    if view is not None and hasattr(view, "_on_close_settings"):
+        view._on_close_settings()
+    return True
+
+
+def _guard_scroll(root) -> None:
+    child = root.get_first_child()
+    while child is not None:
+        if isinstance(child, (Gtk.ComboBox, Gtk.DropDown, Gtk.SpinButton)):
+            ctrl = Gtk.EventControllerScroll.new(Gtk.EventControllerScrollFlags.VERTICAL)
+            ctrl.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+            ctrl.connect("scroll", _scroll_page_instead)
+            child.add_controller(ctrl)
+        else:
+            _guard_scroll(child)
+        child = child.get_next_sibling()
+
+
 class SettingsView(Gtk.Box):
     """Settings view matching official MeshCore app layout."""
 
@@ -88,10 +152,18 @@ class SettingsView(Gtk.Box):
         reload_btn = Gtk.Button.new_with_label("Reload")
         reload_btn.connect("clicked", self._on_reload)
         actions.append(reload_btn)
+        close_btn = Gtk.Button.new_with_label("Close")  # [settings-close patch]
+        close_btn.set_tooltip_text("Back to the previous screen (Esc). Unsaved changes are discarded.")
+        close_btn.connect("clicked", self._on_close_settings)
+        actions.append(close_btn)
+        esc = Gtk.EventControllerKey.new()
+        esc.connect("key-pressed", _settings_escape)
+        self.add_controller(esc)
         actions.append(self._status_label)
         content.append(actions)
 
         self._load_from_service()
+        _guard_scroll(self)  # [settings-guard patch] the wheel scrolls the page, never a dropdown
 
     def _build_public_info_panel(self) -> Gtk.Box:
         panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -570,6 +642,43 @@ class SettingsView(Gtk.Box):
         self._set_switch("use_dio2_rf", updated.use_dio2_rf)
         self._set_switch("use_dio3_tcxo", updated.use_dio3_tcxo)
 
+    def _on_close_settings(self, _button=None) -> None:  # [settings-close patch]
+        """Back to the screen Settings was opened from. Unsaved edits are dropped (after
+        asking): left in the form, a stray edit used to be saved later by accident."""
+        from dataclasses import asdict
+
+        try:
+            dirty = asdict(self._collect_settings(allow_partial=True)) != asdict(self._service.get_settings())
+        except Exception:  # noqa: BLE001 - unparsable text in a field is an unsaved change too
+            dirty = True
+        if not dirty:
+            self._leave_settings()
+            return
+        from gi.repository import Adw
+
+        from meshcore_console.ui_gtk.compat import build_alert_dialog, present_dialog
+
+        dialog = build_alert_dialog(self.get_root(), "Discard unsaved changes?",
+                                    "Some settings were changed but not saved.")
+        dialog.add_response("cancel", "Keep editing")
+        dialog.add_response("discard", "Discard")
+        dialog.set_response_appearance("discard", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+        dialog.connect("response", self._on_close_response)
+        present_dialog(dialog, self.get_root())
+
+    def _on_close_response(self, _dialog, response: str) -> None:
+        if response == "discard":
+            self._leave_settings()
+
+    def _leave_settings(self) -> None:
+        self._load_from_service()  # the form always matches what is saved
+        self._status_label.set_text("")
+        root = self.get_root()
+        if root is not None and hasattr(root, "close_settings"):
+            root.close_settings()
+
     def _on_reload(self, _button: Gtk.Button) -> None:
         logger.debug("UI: reload settings button clicked")
         self._load_from_service()
@@ -584,18 +693,53 @@ class SettingsView(Gtk.Box):
             self._status_label.set_text(f"Invalid: {exc}")
             return
 
+        changes = _radio_changes(self._service.get_settings(), settings)  # [settings-guard patch]
+        if changes and not getattr(self, "_radio_change_confirmed", False):
+            self._confirm_radio_changes(settings, changes)
+            return
+        self._radio_change_confirmed = False
         try:
             self._service.update_settings(settings)
         except Exception as exc:  # noqa: BLE001
             logger.error("Settings save failed: %s", exc)
             self._status_label.set_text(f"Save failed: {exc}")
             return
+        if changes:
+            logger.warning("Radio settings changed: %s", "; ".join(changes))
 
         logger.debug("UI: settings saved successfully")
         if self._service.get_status().connected:
             self._status_label.set_text("Saved. Restart the app to apply radio changes.")
         else:
             self._status_label.set_text("Settings saved.")
+
+    def _confirm_radio_changes(self, settings, changes: list[str]) -> None:  # [settings-guard patch]
+        from gi.repository import Adw
+
+        from meshcore_console.ui_gtk.compat import build_alert_dialog, present_dialog
+
+        body = ("These radio settings will change:\n\n" + "\n".join(f"\u2022 {c}" for c in changes)
+                + "\n\nA wrong frequency, bandwidth, SF or CR takes you off the mesh (you can still "
+                  "hear nothing and nobody hears you). Save anyway?")
+        dialog = build_alert_dialog(self.get_root(), "Change radio settings?", body)
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("revert", "Discard these changes")
+        dialog.add_response("save", "Save")
+        dialog.set_response_appearance("save", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+        dialog.connect("response", self._on_radio_confirm, settings)
+        present_dialog(dialog, self.get_root())
+
+    def _on_radio_confirm(self, _dialog, response: str, _settings) -> None:
+        if response == "save":
+            self._radio_change_confirmed = True
+            self._on_save(None)
+        elif response == "revert":
+            self._load_from_service()
+            self._status_label.set_text("Radio changes discarded; form reloaded from saved settings.")
+        else:
+            self._status_label.set_text("Not saved.")
 
     def _load_from_service(self) -> None:
         settings = self._service.get_settings()

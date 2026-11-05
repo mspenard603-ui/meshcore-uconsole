@@ -44,7 +44,7 @@ window,
 
 .nav-button {
   border-radius: 6px;
-  padding: 4px 8px;
+  padding: 4px 6px; /* [rooms patch] 7 tabs on a 1280 px header */
   font-weight: 600;
 }
 
@@ -164,6 +164,12 @@ row:focus-visible {
 
 .status-pill.warn {
   background: alpha(@mc_warn, 0.22);
+  color: @mc_text;
+}
+
+/* [room-marker patch] room servers: violet, as their map marker */
+.status-pill.room {
+  background: alpha(#a98bff, 0.28);
   color: @mc_text;
 }
 
@@ -568,7 +574,7 @@ row:focus-visible {
 
 .peer-list row {
   border-radius: 8px;
-  margin: 2px 6px;
+  margin: 2px 14px 2px 6px; /* [list-gutter patch] room for the overlay scrollbar */
 }
 
 .peer-list row.peer-row {

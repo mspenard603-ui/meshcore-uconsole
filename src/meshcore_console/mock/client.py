@@ -279,6 +279,121 @@ class MockMeshcoreClient(MeshcoreService):
                 peer.is_favorite = favorite
                 return
 
+    def delete_peer(self, peer_id: str) -> bool:
+        """Delete one contact or repeater. [delete-peer patch]"""
+        name = next((n for n, p in self._peers.items() if p.peer_id == peer_id), None)
+        if name is None:
+            return False
+        del self._peers[name]
+        return True
+
+    def delete_peers(self, repeaters: bool, keep_favorites: bool = False) -> int:
+        """Delete every contact or every repeater. [clear-peers patch]"""
+        doomed = [
+            name
+            for name, p in list(self._peers.items())
+            if bool(p.is_repeater) == repeaters and not (keep_favorites and p.is_favorite)
+        ]
+        for name in doomed:
+            del self._peers[name]
+        return len(doomed)
+
+    # --- [repeater-stats patch] -----------------------------------------------
+    def _mock_stats(self, rnd, t: float, i: int = 0) -> dict:
+        import math
+
+        day = math.sin(2 * math.pi * (t % 86400) / 86400)
+        return {
+            "type": "stats",
+            "batt_milli_volts": int(4100 - (i % 2000) / 4),
+            "noise_floor": round(-112 + 2 * day + rnd.gauss(0, 1)),
+            "last_rssi": round(-96 + 6 * day + rnd.gauss(0, 4)),
+            "last_snr": round(rnd.uniform(-4, 10) * 4) / 4,
+            "curr_tx_queue_len": rnd.randint(0, 2),
+            "n_packets_recv": 50000 + i * 40,
+            "n_packets_sent": 21000 + i * 15,
+            "total_air_time_secs": 9000 + i * 4,
+            "total_up_time_secs": 400000 + i * 300,
+            "n_sent_flood": 18000 + i * 12,
+            "n_sent_direct": 3000 + i * 3,
+            "n_recv_flood": 45000 + i * 35,
+            "n_recv_direct": 5000 + i * 5,
+            "err_events": 3,
+            "n_direct_dups": 120,
+            "n_flood_dups": 9000 + i * 8,
+            "total_rx_air_time_secs": 30000 + i * 12,
+            "n_recv_errors": 40,
+        }
+
+    def get_repeater_samples(self):
+        store = getattr(self, "_mock_samples", None)
+        if store is None:
+            import math
+            import random
+            import sqlite3
+            import time
+
+            from meshcore_console.meshcore.repeater_stats import (
+                RepeaterSampleStore,
+                stats_sample,
+            )
+
+            store = RepeaterSampleStore(sqlite3.connect(":memory:", check_same_thread=False))
+            now, rnd = time.time(), random.Random(42)
+            for p in self._peers.values():
+                if not p.is_repeater:
+                    continue
+                key = p.public_key or p.peer_id
+                base = rnd.uniform(-105, -75)
+                for i, t in enumerate(range(int(now - 3 * 86400), int(now), 240)):
+                    if rnd.random() < 0.15:
+                        continue  # gaps, like real traffic
+                    day = math.sin(2 * math.pi * (t % 86400) / 86400)
+                    store.add(
+                        key,
+                        "heard",
+                        ts=t,
+                        rssi=base + 4 * day + rnd.gauss(0, 2.5),
+                        snr=(base + 115) / 3 + day + rnd.gauss(0, 1.2),
+                    )
+                    if i % 4 == 0:
+                        store.add(key, "stats", ts=t, **stats_sample(self._mock_stats(rnd, t, i)))
+            self._mock_samples = store
+        return store
+
+    def trace_repeater(self, peer_name: str) -> dict:  # [trace patch]
+        import random
+
+        from meshcore_console.meshcore.trace import trace_route
+
+        peer = self._peers.get(peer_name)
+        if peer is None:
+            return {"success": False, "reason": "Unknown repeater"}
+        route, _w = trace_route(list(peer.last_path or []), peer.public_key or "AA00")
+        nodes = ["me", *route, "me"]
+        links = [
+            {"from": nodes[i], "to": nodes[i + 1], "snr": round(random.uniform(-6, 12) * 4) / 4}
+            for i in range(len(nodes) - 1)
+        ]
+        result = {"success": True, "route": route, "links": links, "rtt_ms": 400 * len(links)}
+        from meshcore_console.meshcore.trace import log_trace  # [trace-log patch]
+
+        log_trace(self.get_repeater_samples(), peer.public_key or peer.peer_id, result, 7)
+        return result
+
+    def request_repeater_stats(self, peer_name: str) -> dict:
+        import random
+        import time
+
+        from meshcore_console.meshcore.repeater_stats import stats_sample
+
+        peer = self._peers.get(peer_name)
+        stats = self._mock_stats(random.Random(), time.time(), 900)
+        if peer is not None:
+            key = peer.public_key or peer.peer_id
+            self.get_repeater_samples().add(key, "stats", **stats_sample(stats))
+        return {"success": True, "stats": stats, "rtt_ms": 420}
+
     def request_telemetry(self, peer_name: str) -> dict:
         """Return synthetic telemetry data matching openhop_core's format."""
         import time

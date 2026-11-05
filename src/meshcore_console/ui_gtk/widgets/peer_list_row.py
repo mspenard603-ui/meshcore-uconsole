@@ -31,7 +31,7 @@ class PeerListRow(Gtk.ListBoxRow):
         listbox.append(row)
     """
 
-    def __init__(self, peer: Peer) -> None:
+    def __init__(self, peer: Peer, distance_km: float | None = None) -> None:
         super().__init__()
         self.peer = peer
         self.add_css_class("peer-row")
@@ -81,6 +81,13 @@ class PeerListRow(Gtk.ListBoxRow):
                 meta_text = f"seen {local_dt.strftime('%b %-d, %H:%M')}"
         else:
             meta_text = "not seen"
+        if distance_km is not None:  # [peer-sort patch]
+            from meshcore_console.ui_gtk.views.peers import DISTANCE_IN_MILES
+
+            if DISTANCE_IN_MILES:
+                meta_text += f" \u00b7 {distance_km / 1.609344:.1f} mi"
+            else:
+                meta_text += f" \u00b7 {distance_km:.1f} km"
         meta = Gtk.Label(label=meta_text)
         meta.add_css_class("panel-muted")
         meta.add_css_class("peer-meta")

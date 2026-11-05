@@ -104,8 +104,28 @@ class MeshcoreService(Protocol):
         """Toggle the favorite flag on a peer."""
         ...
 
+    def delete_peer(self, peer_id: str) -> bool:
+        """Delete one contact or repeater. [delete-peer patch]"""
+        ...
+
+    def delete_peers(self, repeaters: bool, keep_favorites: bool = False) -> int:
+        """Delete all contacts (repeaters=False) or all repeaters. [clear-peers patch]"""
+        ...
+
     def request_telemetry(self, peer_name: str) -> dict:
         """Request telemetry data from a remote peer. Returns decoded sensor data."""
+        ...
+
+    def request_repeater_stats(self, peer_name: str) -> dict:
+        """Poll a repeater's RepeaterStats (needs login). [repeater-stats patch]"""
+        ...
+
+    def get_repeater_samples(self):
+        """RepeaterSampleStore with heard/stats history. [repeater-stats patch]"""
+        ...
+
+    def trace_repeater(self, peer_name: str) -> dict:
+        """Round-trip TRACE to a repeater: SNR per link. [trace patch]"""
         ...
 
     def get_self_public_key(self) -> str | None:

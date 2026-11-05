@@ -141,6 +141,13 @@ class PeerStore:
         )
         self._conn.commit()
 
+    def delete_peers(self, peer_ids: list[str]) -> None:
+        """Delete peers by peer_id. [clear-peers patch]"""
+        self._conn.executemany(
+            "DELETE FROM peers WHERE peer_id = ?", [(pid,) for pid in peer_ids]
+        )
+        self._conn.commit()
+
     def __len__(self) -> int:
         return self._conn.execute("SELECT COUNT(*) FROM peers").fetchone()[0]
 

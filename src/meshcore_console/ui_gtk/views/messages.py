@@ -124,6 +124,13 @@ class MessagesView(Gtk.Box):
 
         self._is_at_bottom = True
         self._scroll.get_vadjustment().connect("value-changed", self._on_scroll_value_changed)
+        # [chat-scroll patch] re-check the jump button when the content height changes
+        # (loading a channel), not only when the view scrolls; follow the bottom then
+        self._scroll.get_vadjustment().connect("notify::upper", self._on_chat_extent)
+        self._scroll.get_vadjustment().connect("notify::page-size", self._on_chat_extent)
+        wheel = Gtk.EventControllerScroll.new(Gtk.EventControllerScrollFlags.VERTICAL)
+        wheel.connect("scroll", self._on_chat_wheel)
+        self._scroll.add_controller(wheel)
 
         self._message_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self._message_box.set_margin_start(12)
@@ -201,9 +208,13 @@ class MessagesView(Gtk.Box):
         else:
             messages = self._service.list_messages_for_channel(self._selected_channel_id, limit=100)
             new_count = len(messages)
-            if new_count > self._last_message_count:
-                # Append only the new messages instead of full rebuild
-                new_messages = messages[self._last_message_count :]
+            # [chat-100 patch] the list is capped at 100, so once a channel has 100
+            # messages the count stops growing: find what is new by message id
+            new_messages = self._new_since_shown(messages)
+            if new_messages is None:
+                self._reload_messages()
+                new_messages = []
+            if new_messages:
                 # Remove the "no messages" placeholder if it was showing
                 if self._last_message_count == 0:
                     clear_children(self._message_box)
@@ -216,6 +227,7 @@ class MessagesView(Gtk.Box):
                         MessageBubble(message, self._service, self._on_message_clicked)
                     )
                 self._last_message_count = new_count
+                self._last_message_id = messages[-1].message_id  # [chat-100 patch]
                 if self._is_at_bottom:
                     GLib.idle_add(self._scroll_to_bottom)
                     self._service.mark_channel_read(self._selected_channel_id)
@@ -226,10 +238,77 @@ class MessagesView(Gtk.Box):
         self._refresh_compose_state()
         return True
 
+    def _new_since_shown(self, messages: list) -> list | None:  # [chat-100 patch]
+        """Messages after the newest one on screen; None if the view must be rebuilt
+        (cleared, or the newest shown one is no longer in the list)."""
+        last_id = getattr(self, "_last_message_id", None)
+        if last_id is None:
+            return messages if self._last_message_count == 0 else None
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i].message_id == last_id:
+                return messages[i + 1 :]
+        return None
+
+    def _on_messages_shown(self, _widget) -> None:  # [chat-scroll fix]
+        if getattr(self, "_scroll_pending", False):
+            self._scroll_pending = False
+            GLib.idle_add(self._scroll_to_bottom)
+
     def _scroll_to_bottom(self) -> bool:
-        adj = self._scroll.get_vadjustment()
-        adj.set_value(adj.get_upper() - adj.get_page_size())
+        # [chat-scroll patch] Right after a channel loads, the new bubbles are not laid
+        # out yet, so one set_value() lands short of the end. For the next 4 s (longer
+        # while the content keeps growing),
+        # follow the bottom whenever the content grows (after layout) and on frame
+        # ticks; scrolling up with the wheel stops it at once.
+        import time as _time
+
+        self._pin_until = _time.monotonic() + 4.0  # a CM4 can take seconds to lay out 100 bubbles
+        self._chat_to_bottom()
+        if not getattr(self, "_pin_tick", 0):
+            self._pin_tick = self._scroll.add_tick_callback(self._pin_bottom_tick)
         return False  # GLib.SOURCE_REMOVE
+
+    def _pinning(self) -> bool:
+        import time as _time
+
+        return _time.monotonic() < getattr(self, "_pin_until", 0.0)
+
+    def _chat_to_bottom(self, *_args) -> bool:
+        adj = self._scroll.get_vadjustment()
+        target = adj.get_upper() - adj.get_page_size()
+        if adj.get_value() < target:
+            adj.set_value(target)
+        return False
+
+    def _on_chat_extent(self, adj, _pspec) -> None:
+        import time as _time
+
+        self._on_scroll_value_changed(adj)
+        if self._pinning():  # still growing: keep following a little longer
+            self._pin_until = max(self._pin_until, _time.monotonic() + 0.5)
+        if self._pinning() and not getattr(self, "_pin_idle", False):
+            # setting the value during layout doesn't stick (same as the Admin
+            # console): do it just after layout
+            self._pin_idle = True
+
+            def after_layout() -> bool:
+                self._pin_idle = False
+                self._chat_to_bottom()
+                return False
+
+            GLib.idle_add(after_layout)
+
+    def _pin_bottom_tick(self, _widget, _clock) -> bool:
+        if not self._pinning():
+            self._pin_tick = 0
+            return False
+        self._chat_to_bottom()
+        return True
+
+    def _on_chat_wheel(self, _ctrl, _dx: float, dy: float) -> bool:
+        if dy < 0:
+            self._pin_until = 0.0  # the user is reading back: stop following
+        return False
 
     def _scroll_to_widget(self, widget: Gtk.Widget) -> bool:
         allocation = widget.get_allocation()
@@ -314,7 +393,7 @@ class MessagesView(Gtk.Box):
             if channel.channel_id != "public":
                 gesture = Gtk.GestureClick.new()
                 gesture.set_button(Gdk.BUTTON_SECONDARY)
-                gesture.connect("pressed", self._on_channel_right_click, row)
+                gesture.connect("pressed", self._on_channel_right_click)  # [leak-fix patch] no row ref
                 row.add_controller(gesture)
 
             self._channel_list.append(row)
@@ -349,6 +428,7 @@ class MessagesView(Gtk.Box):
 
         messages = self._service.list_messages_for_channel(self._selected_channel_id, limit=100)
         self._last_message_count = len(messages)
+        self._last_message_id = messages[-1].message_id if messages else None  # [chat-100 patch]
 
         if not messages:
             self._last_message_date = None
@@ -371,10 +451,11 @@ class MessagesView(Gtk.Box):
                 first_unread_widget = bubble
         self._last_message_date = prev_date
 
-        if first_unread_widget is not None:
-            GLib.idle_add(self._scroll_to_widget, first_unread_widget)
-        else:
-            GLib.idle_add(self._scroll_to_bottom)
+        GLib.idle_add(self._scroll_to_bottom)  # [chat-scroll patch] always open at the newest messages
+        self._scroll_pending = not self.get_mapped()  # [chat-scroll fix] loaded while hidden
+        if not getattr(self, "_scroll_map_hooked", False):
+            self.connect("map", self._on_messages_shown)
+            self._scroll_map_hooked = True
 
     def _on_message_clicked(self, _button: Gtk.Button, message: Message) -> None:
         """Show message details when clicked."""
@@ -450,14 +531,18 @@ class MessagesView(Gtk.Box):
             self_name = self._service.get_status().node_id
 
             path = PathVisualization(
-                hops=message.path_hops,
+                hops=list(reversed(message.path_hops)),
                 peers=all_peers,
                 arrow="\u2190",
                 start=(self_prefix, self_name, None, STYLE_SELF),
                 end=(sender_prefix, sender_name, sender_peer, STYLE_DEFAULT),
             )
             path.set_margin_top(4)
+            path.set_min_children_per_line(min(len(message.path_hops) + 2, 6))  # [channel-actions patch] one row
             self._details_box.append(path)
+            from meshcore_console.ui_gtk.widgets.trace_view import enable_hop_targets
+
+            enable_hop_targets(path)  # [hop-target patch] click a repeater: 'Trace to here'
         elif message.path_len == 0:
             self._details_box.append(DetailRow("Hops:", "Direct"))
         else:
@@ -478,12 +563,137 @@ class MessagesView(Gtk.Box):
         if not message.is_outgoing and message.rssi is not None:
             self._details_box.append(DetailRow("RSSI:", f"{message.rssi} dBm"))
 
+        if not message.is_outgoing:  # [channel-actions patch] favourite + trace
+            self._details_box.append(self._message_actions(message))
+
         # Close button
         close_btn = Gtk.Button.new_with_label("Close")
         close_btn.set_halign(Gtk.Align.END)
         close_btn.set_margin_top(8)
         close_btn.connect("clicked", self._on_close_details)
         self._details_box.append(close_btn)
+
+    # --- [channel-actions patch] -------------------------------------------------
+    # Channel messages carry only the sender's name (no key), so 'Favorite' works
+    # when that name is already one of your contacts (heard from their advert).
+    # 'Trace route' traces the repeaters the message came through, out to the one
+    # nearest the sender and back: companions don't relay TRACE, repeaters do.
+    def _message_actions(self, message: Message) -> Gtk.Widget:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.set_margin_top(8)
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        box.append(row)
+        # [channel-reply patch] reply is the \u21a9 after each incoming message
+        notes = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+
+        def note(text: str) -> None:
+            lab = Gtk.Label(label=text)
+            lab.add_css_class("panel-muted")
+            lab.set_wrap(True)
+            lab.set_xalign(0.0)
+            lab.set_halign(Gtk.Align.START)
+            notes.append(lab)
+
+        contact = next(
+            (p for p in self._service.list_peers() if not p.is_repeater and p.display_name == message.sender_id),
+            None,
+        )
+        if contact is not None:
+            fav = Gtk.Button(label="\u2605 Unfavorite" if contact.is_favorite else "\u2606 Favorite")
+            fav.set_tooltip_text(f"Mark {contact.display_name} as a favourite under Peers \u203a Contacts")
+            fav.connect("clicked", self._on_message_fav_clicked, contact.peer_id)
+            row.append(fav)
+        else:
+            note(f"{message.sender_id} isn't in your contacts yet: channel messages carry only a name. "
+                 "They'll appear (and can be favourited) once their advert is heard.")
+
+        hops = [str(h) for h in reversed(message.path_hops or [])]  # our side first
+        if hops and hasattr(self._service, "trace_hops"):
+            results = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            trace = Gtk.Button(label="Trace route")
+            trace.add_css_class("hop-trace-btn")  # [hop-target patch]
+            trace.set_tooltip_text("Round-trip TRACE through the repeaters this message came through, "
+                                   "to the one nearest the sender and back: SNR for every link")
+            trace.connect("clicked", self._on_message_trace_clicked, hops, results)
+            row.append(trace)
+            box.append(notes)
+            box.append(results)
+        else:
+            if message.path_len == 0:
+                note("It came directly (no repeaters), so there is no route to trace.")
+            box.append(notes)
+        return box
+
+    def _on_message_reply_clicked(self, _btn: Gtk.Button, message: Message) -> None:  # [channel-reply patch]
+        """Start a reply: in a group channel, prefix the draft with @[sender] (the
+        MeshCore mention format, shown as @sender); in a DM just focus the box."""
+        channel = next((c for c in self._service.list_channels() if c.channel_id == message.channel_id), None)
+        is_group = channel is None or channel.kind == "group"
+        text = self._entry.get_text()
+        mention = f"@[{message.sender_id}] "
+        if is_group and not text.startswith(mention):
+            self._entry.set_text(mention + text)
+        self._entry.grab_focus()
+        self._entry.set_position(-1)
+
+    def _on_message_fav_clicked(self, btn: Gtk.Button, peer_id: str) -> None:
+        peer = next((p for p in self._service.list_peers() if p.peer_id == peer_id), None)
+        if peer is None:
+            return
+        favorite = not peer.is_favorite  # decide first: the service may update this same object
+        self._service.set_favorite(peer_id, favorite)
+        btn.set_label("\u2605 Unfavorite" if favorite else "\u2606 Favorite")
+
+    def _on_message_trace_clicked(self, btn: Gtk.Button, hops: list[str], results: Gtk.Box) -> None:
+        import threading
+
+        from meshcore_console.ui_gtk.widgets.trace_view import hops_to_target, trace_button_label
+
+        hops = hops_to_target(btn, hops)  # [hop-target patch] only out to the picked repeater
+
+        from meshcore_console.ui_gtk.widgets.trace_view import build_trace_view
+
+        btn.set_sensitive(False)
+        btn.set_label("Tracing\u2026")
+        clear_children(results)
+        peers = self._service.list_peers()
+        target = find_peer_for_hop([p for p in peers if p.is_repeater], hops[-1])
+        target_name = target.display_name if target is not None else hops[-1]
+
+        def work() -> None:
+            try:
+                from meshcore_console.meshcore.trace import trace_source
+
+                with trace_source("channels"):
+                    result = self._service.trace_hops(hops)
+            except Exception as exc:  # noqa: BLE001
+                result = {"success": False, "reason": str(exc) or type(exc).__name__}
+
+            def done() -> bool:
+                btn.set_sensitive(True)
+                btn.set_label(trace_button_label(btn))  # [hop-target patch]
+                if results.get_root() is None:
+                    return False  # details panel was closed or rebuilt
+                self_key = self._service.get_self_public_key() or ""
+                results.append(
+                    build_trace_view(
+                        result,
+                        self._service.list_peers(),
+                        target=target_name,
+                        self_label=f"{self._service.get_status().node_id} ({self_key[:2].upper() or 'me'})",
+                        spreading_factor=self._service.get_settings().spreading_factor,
+                        compact=True,
+                    )
+                )
+                if not result.get("success") and not result.get("busy"):  # [find-break patch]
+                    from meshcore_console.ui_gtk.widgets.trace_view import find_break_widget
+
+                    results.append(find_break_widget(self._service, hops, "channels"))
+                return False
+
+            GLib.idle_add(done)
+
+        threading.Thread(target=work, daemon=True).start()
 
     def _on_mention_clicked(self, _label: Gtk.Label, uri: str) -> bool:
         """Handle clicks on @mention links — navigate to the peer."""
@@ -606,9 +816,9 @@ class MessagesView(Gtk.Box):
         _n_press: int,
         x: float,
         y: float,
-        row: Gtk.ListBoxRow,
     ) -> None:
         """Show context menu on right-click for channel actions."""
+        row = gesture.get_widget()  # [leak-fix patch]
         channel_id = getattr(row, "channel_id", None)
         logger.debug("UI: channel right-click channel_id=%s", channel_id)
         if not channel_id:
@@ -826,7 +1036,9 @@ class MessagesView(Gtk.Box):
         self._thread_title.set_text(self._get_channel_display_name(channel_id))
 
     def _on_send(self, *_args: object) -> None:
-        body = self._entry.get_text().strip()
+        from meshcore_console.ui_gtk.helpers import capitalize_first  # [capitalize patch]
+
+        body = capitalize_first(self._entry.get_text().strip())
         logger.debug(
             "UI: send clicked channel=%s body_len=%d", self._selected_channel_id, len(body)
         )

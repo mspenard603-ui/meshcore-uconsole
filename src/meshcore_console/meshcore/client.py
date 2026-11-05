@@ -75,12 +75,22 @@ class MeshcoreClient(MeshcoreService):
         self._peer_store = peer_store or PeerStore(self._db)
         self._channel_store = channel_store or UIChannelStore(self._db)
         self._repeater_password_store = RepeaterPasswordStore(self._db)
+        from meshcore_console.meshcore.repeater_stats import open_sample_store
+
+        self._repeater_samples = open_sample_store()  # [repeater-stats patch]
         self._channel_secrets = ChannelDatabase(self._db)
         self._repeater_sessions: dict[str, RepeaterLoginState] = {}
         # Load persisted state
         self._messages: list[Message] = self._message_store.get_all()
         self._channels: dict[str, Channel] = self._channel_store.get_all()
         self._peers: dict[str, Peer] = self._peer_store.get_all()
+        try:  # [rooms patch] node types are kept beside the app's peers table
+            _types = self._repeater_samples.node_types()
+            for _p in self._peers.values():
+                if _p.public_key:
+                    _p.node_type = _types.get(_p.public_key.lower())
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("could not load node types: %s", exc)
         self._sync_channel_secrets_to_ui()
         self._settings = self._settings_store.load()
         if node_name != "uconsole-node":
@@ -237,7 +247,8 @@ class MeshcoreClient(MeshcoreService):
             channel = Channel(channel_id="public", display_name="#public", unread_count=0)
             self._channels["public"] = channel
             self._channel_store.add_or_update(channel)
-        return sorted(self._channels.values(), key=lambda c: c.display_name.lower())
+        return sorted((c for c in self._channels.values() if c.kind != "room"),  # [room-chat patch] rooms have their own tab
+                      key=lambda c: c.display_name.lower())
 
     def ensure_channel(self, channel_id: str, display_name: str | None = None) -> Channel:
         """Ensure a channel exists, creating it if necessary."""
@@ -460,6 +471,7 @@ class MeshcoreClient(MeshcoreService):
         for event in events:
             self._append_history(event)
             self._process_event_for_peers(event)
+            self._record_heard_sample(event)  # [repeater-stats patch]
             # Persist packet events to state storage
             if event.get("type") in (EventType.PACKET, EventType.RAW_PACKET):
                 try:
@@ -634,7 +646,10 @@ class MeshcoreClient(MeshcoreService):
         if self_pubkey and public_key and self_pubkey == public_key:
             return
 
-        path_hops = data.get("path_hops", [])
+        # [path-order patch] Flood paths arrive in relay order (sender side
+        # first). Reverse to outbound order (our side first) for display
+        # and for the contact's direct-route out_path.
+        path_hops = list(reversed(data.get("path_hops") or []))
         rssi_raw = data.get("rssi")
         snr_raw = data.get("snr")
 
@@ -674,6 +689,12 @@ class MeshcoreClient(MeshcoreService):
         # overwrite a previously learned route.
         inbound_path: bytes | None = data.get("inbound_path")  # type: ignore[assignment]
         path_len_encoded: int | None = data.get("path_len_encoded")  # type: ignore[assignment]
+        if inbound_path and path_len_encoded is not None:  # [path-order patch]
+            _hs = (path_len_encoded >> 6) + 1
+            _b = bytes(inbound_path)
+            inbound_path = b"".join(
+                _b[i : i + _hs] for i in reversed(range(0, len(_b), _hs))
+            )
         if path_len_encoded is None and public_key and "path_hops" in data:
             if not path_hops:
                 inbound_path = b""
@@ -714,6 +735,19 @@ class MeshcoreClient(MeshcoreService):
                 inbound_path=inbound_path,
                 path_len_encoded=path_len_encoded,
             )
+        if advert_type is not None:  # [rooms patch] remember room servers / sensors
+            _peer = self._peers.get(peer_name)
+            try:
+                _t = int(advert_type)
+            except (TypeError, ValueError):
+                _t = None
+            if _peer is not None and _t is not None and _peer.node_type != _t:
+                _peer.node_type = _t
+                if _peer.public_key:
+                    try:
+                        self._repeater_samples.set_node_type(_peer.public_key, _t)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug("could not store node type: %s", exc)
 
     def _update_existing_peer(
         self,
@@ -798,6 +832,11 @@ class MeshcoreClient(MeshcoreService):
         if not message_text:
             return
 
+        room = self._room_for_sender(sender_name)  # [room-chat patch] a room's pushed posts
+        if room is not None and (data.get("sender_prefix") or data.get("txt_type") == 2):
+            self._store_room_post(room, data, str(message_text))
+            return
+
         # Direct messages (TXT_MSG) have no channel_name — route to a per-contact channel.
         # Detect via: payload_type_name, EventService event type, or absence of channel_name.
         payload_type_name = data.get("payload_type_name", "")
@@ -856,6 +895,143 @@ class MeshcoreClient(MeshcoreService):
         else:
             self._channels[channel_name].unread_count += 1
             self._channel_store.add_or_update(self._channels[channel_name])
+
+    # --- [room-chat patch] -----------------------------------------------------
+    # Room servers push their posts as signed text (author key prefix + text),
+    # one at a time, each waiting for our ACK (openhop_core sends it). Posts are
+    # kept in a per-room channel of kind "room", hidden from Channels.
+    def _room_for_sender(self, name: str):
+        peer = self._peers.get(name)
+        return peer if peer is not None and getattr(peer, "node_type", None) == 3 else None
+
+    @staticmethod
+    def room_channel_id(room: Peer) -> str:
+        return "room:" + (room.public_key or room.display_name).lower()[:16]
+
+    def _room_channel(self, room: Peer) -> Channel:
+        cid = self.room_channel_id(room)
+        chan = self._channels.get(cid)
+        if chan is None:
+            chan = Channel(channel_id=cid, display_name=room.display_name, unread_count=0,
+                           peer_name=room.display_name, kind="room")
+            self._channels[cid] = chan
+            self._channel_store.add_or_update(chan)
+        return chan
+
+    def _room_author(self, room: Peer, prefix: str) -> str:
+        prefix = (prefix or "").lower()
+        if not prefix:
+            return room.display_name
+        own = (self.get_self_public_key() or "").lower()
+        if own.startswith(prefix):
+            return self._settings.node_name
+        if (room.public_key or "").lower().startswith(prefix):
+            return room.display_name  # the room's own (system) posts
+        found = next((p for p in self._peers.values() if p.public_key and p.public_key.lower().startswith(prefix)), None)
+        return found.display_name if found is not None else prefix.upper()
+
+    def _store_room_post(self, room: Peer, data: MeshEventDict, text: str) -> None:
+        try:
+            ts = int(data.get("timestamp") or 0)
+        except (TypeError, ValueError):
+            ts = 0
+        prefix = str(data.get("sender_prefix") or "")
+        chan = self._room_channel(room)
+        msg_id = f"room_{(room.public_key or '')[:8]}_{ts}_{prefix}"
+        if any(m.message_id == msg_id for m in self._messages if m.channel_id == chan.channel_id):
+            return  # re-pushed after a missed ACK
+        created = datetime.fromtimestamp(ts, UTC) if ts > 1_600_000_000 else datetime.now(UTC)
+        snr, rssi = data.get("snr"), data.get("rssi")
+        message = Message(message_id=msg_id, sender_id=self._room_author(room, prefix), body=text,
+                          channel_id=chan.channel_id, created_at=created, is_outgoing=False,
+                          snr=float(snr) if snr is not None else None,
+                          rssi=int(rssi) if rssi is not None else None)
+        self._messages.append(message)
+        self._message_store.append(message)
+        chan.unread_count += 1
+        self._channel_store.add_or_update(chan)
+        if room.public_key and ts:
+            try:
+                self._repeater_samples.set_room_sync(room.public_key, ts)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("room sync not saved: %s", exc)
+
+    def list_room_posts(self, room_name: str, limit: int = 200) -> list[Message]:
+        room = self._peers.get(room_name)
+        if room is None:
+            return []
+        cid = self.room_channel_id(room)
+        return [m for m in self._messages if m.channel_id == cid][-limit:]
+
+    def mark_room_read(self, room_name: str) -> None:
+        room = self._peers.get(room_name)
+        chan = self._channels.get(self.room_channel_id(room)) if room is not None else None
+        if chan is not None and chan.unread_count:
+            chan.unread_count = 0
+            self._channel_store.add_or_update(chan)
+
+    def room_unread(self, room_name: str) -> int:
+        room = self._peers.get(room_name)
+        chan = self._channels.get(self.room_channel_id(room)) if room is not None else None
+        return chan.unread_count if chan is not None else 0
+
+    def get_room_login_state(self, room_name: str) -> dict | None:
+        return getattr(self, "_room_sessions", {}).get(room_name)
+
+    def login_to_room(self, room_name: str, password: str, *, save_password: bool = False) -> dict:
+        """Log in to a room server; it then pushes posts newer than our saved sync point."""
+        import time as _time
+
+        if not self._connected:
+            return {"success": False, "reason": "Radio not connected"}
+        room = self._peers.get(room_name)
+        if room is None or not room.public_key:
+            return {"success": False, "reason": "Room not known (no advert heard yet)"}
+        book = self._session.contact_book
+        contact = book.get_by_name(room_name)
+        if contact is None:
+            self._sync_contact_to_book(room_name, room.public_key)
+            contact = book.get_by_name(room_name)
+        if contact is None:
+            return {"success": False, "reason": "Room is not in the contact book"}
+        contact.type = 3  # CONTACT_TYPE_ROOM_SERVER: the login then carries 'sync since'
+        try:
+            contact.sync_since = self._repeater_samples.room_sync(room.public_key)
+        except Exception:  # noqa: BLE001
+            contact.sync_since = 0
+        try:
+            result = self._run_async(self._session.send_repeater_login(room_name, password), timeout=15.0)
+        except Exception as exc:  # noqa: BLE001
+            result = {"success": False, "reason": str(exc) or type(exc).__name__}
+        if result.get("success"):
+            perms = int(result.get("acl_permissions") or 0) & 3
+            if result.get("is_admin"):
+                perms = 3
+            if not hasattr(self, "_room_sessions"):
+                self._room_sessions = {}
+            self._room_sessions[room_name] = {"time": _time.time(), "perms": perms,
+                                              "role": {3: "admin", 2: "read/write", 1: "read-only"}.get(perms, "guest (read-only)")}
+            if save_password:
+                self._repeater_password_store.save_password(room_name, password)
+        return result
+
+    def send_room_post(self, room_name: str, text: str) -> dict:
+        """Post to a room (a plain text message to it; the room ACKs and stores it)."""
+        room = self._peers.get(room_name)
+        if room is None or not self._connected:
+            return {"success": False, "reason": "Radio not connected" if room else "Room not known"}
+        try:
+            res = self._run_async(self._session.send_text(peer_name=room_name, message=text), timeout=30.0)
+        except Exception as exc:  # noqa: BLE001
+            return {"success": False, "reason": str(exc) or type(exc).__name__}
+        ok = bool(res.get("success")) if isinstance(res, dict) else bool(res)
+        if ok:
+            chan = self._room_channel(room)
+            msg = Message(message_id=str(uuid4()), sender_id=self._settings.node_name, body=text,
+                          channel_id=chan.channel_id, created_at=datetime.now(UTC), is_outgoing=True)
+            self._messages.append(msg)
+            self._message_store.append(msg)
+        return {"success": ok, "reason": "" if ok else "No ACK from the room (not delivered, or no write access)"}
 
     def list_recent_events(self, limit: int = 50) -> list[MeshEventDict]:
         if limit <= 0:
@@ -964,6 +1140,171 @@ class MeshcoreClient(MeshcoreService):
                 peer.is_favorite = favorite
                 self._peer_store.set_favorite(peer_id, favorite)
                 return
+
+    def delete_peer(self, peer_id: str) -> bool:
+        """Delete one contact or repeater. [delete-peer patch]"""
+        name = next((n for n, p in self._peers.items() if p.peer_id == peer_id), None)
+        if name is None:
+            return False
+        peer = self._peers.pop(name)
+        self._peer_store.delete_peers([peer.peer_id])
+        if peer.public_key:
+            book = self._session.contact_book
+            book.contacts[:] = [c for c in book.contacts if c.public_key != peer.public_key]
+        return True
+
+    def delete_peers(self, repeaters: bool, keep_favorites: bool = False) -> int:
+        """Delete every contact or every repeater. [clear-peers patch]"""
+        doomed = [
+            name
+            for name, p in list(self._peers.items())
+            if bool(p.is_repeater) == repeaters and not (keep_favorites and p.is_favorite)
+        ]
+        removed = [self._peers.pop(name) for name in doomed]
+        self._peer_store.delete_peers([p.peer_id for p in removed])
+        keys = {p.public_key for p in removed if p.public_key}
+        if keys:
+            book = self._session.contact_book
+            book.contacts[:] = [c for c in book.contacts if c.public_key not in keys]
+        return len(removed)
+
+    # --- [repeater-stats patch] -----------------------------------------------
+    def _record_heard_sample(self, event: MeshEventDict) -> None:
+        """Log a flood packet's RSSI/SNR against the repeater we heard it from."""
+        if event.get("type") != EventType.PACKET:
+            return
+        data = event.get("data")
+        if not isinstance(data, dict) or not data.get("rssi"):
+            return
+        from meshcore_console.meshcore.repeater_stats import heard_transmitter, match_repeater
+
+        try:
+            hop = heard_transmitter(data)
+            if not hop:
+                return
+            key = match_repeater(hop, [p for p in self._peers.values() if p.is_repeater])
+            if key:
+                snr = data.get("snr")
+                self._repeater_samples.add(
+                    key, "heard", rssi=float(data["rssi"]), snr=None if snr is None else float(snr)
+                )
+        except Exception as exc:  # noqa: BLE001 - history is best-effort
+            logger.debug("repeater sample error: %s", exc)
+
+    def request_repeater_stats(self, peer_name: str) -> dict:
+        """Poll a logged-in repeater's RepeaterStats and store them."""
+        from meshcore_console.meshcore.repeater_stats import request_status, stats_sample
+
+        node = getattr(self._session, "_node", None)
+        if not self._connected or node is None:
+            return {"success": False, "reason": "Radio not connected"}
+        try:
+            result = self._run_async(
+                request_status(node=node, contact_name=peer_name, timeout=10.0), timeout=15.0
+            )
+        except Exception as exc:  # noqa: BLE001
+            result = {"success": False, "reason": str(exc) or type(exc).__name__}
+        peer = self._peers.get(peer_name)
+        if result.get("success") and peer is not None and peer.public_key:
+            self._repeater_samples.add(peer.public_key, "stats", **stats_sample(result["stats"]))
+        return result
+
+    def request_repeater_neighbours(self, peer_name: str) -> dict:
+        """Neighbour list via REQ_TYPE_GET_NEIGHBOURS; guest login is enough. [neighbours-request patch]"""
+        from meshcore_console.meshcore.repeater_stats import request_neighbours
+
+        node = getattr(self._session, "_node", None)
+        if not self._connected or node is None:
+            return {"success": False, "reason": "Radio not connected"}
+        try:
+            return self._run_async(
+                request_neighbours(node=node, contact_name=peer_name, timeout=10.0), timeout=50.0
+            )
+        except Exception as exc:  # noqa: BLE001
+            return {"success": False, "reason": str(exc) or type(exc).__name__}
+
+    def request_repeater_neighbour_counts(self, peer_name: str) -> dict:
+        """Neighbour list without key prefixes (26 per reply, so 2 replies for a full
+        50-entry table), summarised for the graph. Guest login is enough. [neighbour-graph patch]"""
+        from meshcore_console.meshcore.repeater_stats import neighbour_counts, request_neighbours
+
+        node = getattr(self._session, "_node", None)
+        if not self._connected or node is None:
+            return {"success": False, "reason": "Radio not connected"}
+        try:
+            result = self._run_async(
+                request_neighbours(node=node, contact_name=peer_name, timeout=10.0, prefix_len=0, max_pages=3),
+                timeout=40.0,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return {"success": False, "reason": str(exc) or type(exc).__name__}
+        if not result.get("success"):
+            return result
+        counts = neighbour_counts(result.get("rows", []), result.get("total", 0))
+        peer = self._peers.get(peer_name)
+        if peer is not None and peer.public_key:
+            self._repeater_samples.add(peer.public_key, "neighbours", data=counts)
+        return {"success": True, **counts}
+
+    def request_repeater_owner_info(self, peer_name: str) -> dict:
+        """Firmware version, name and owner info via REQ_TYPE_GET_OWNER_INFO. [owner-info patch]"""
+        from meshcore_console.meshcore.repeater_stats import request_owner_info
+
+        node = getattr(self._session, "_node", None)
+        if not self._connected or node is None:
+            return {"success": False, "reason": "Radio not connected"}
+        try:
+            return self._run_async(request_owner_info(node=node, contact_name=peer_name, timeout=10.0), timeout=15.0)
+        except Exception as exc:  # noqa: BLE001
+            return {"success": False, "reason": str(exc) or type(exc).__name__}
+
+    def trace_hops(self, hops: list[str]) -> dict:
+        """Round-trip TRACE out along *hops* (hash prefixes, our side first) to the
+        last one and back, e.g. the relays of a received message. [channel-trace patch]"""
+        from meshcore_console.meshcore.trace import log_trace, run_trace, trace_route_hops
+
+        node = getattr(self._session, "_node", None)
+        if not self._connected or node is None:
+            return {"success": False, "reason": "Radio not connected"}
+        try:
+            route, width = trace_route_hops(hops)
+        except ValueError as exc:
+            return {"success": False, "reason": str(exc)}
+        try:
+            result = self._run_async(run_trace(node=node, route=route, width=width, timeout=20.0), timeout=25.0)
+        except Exception as exc:  # noqa: BLE001
+            result = {"success": False, "reason": str(exc) or type(exc).__name__, "route": route}
+        # log it against the target repeater when its hash names exactly one
+        target = str(hops[-1]).lower()
+        matches = [p for p in self._peers.values() if p.is_repeater and p.public_key and p.public_key.lower().startswith(target)]
+        if len(matches) == 1:
+            log_trace(self._repeater_samples, matches[0].public_key, result, self._settings.spreading_factor)
+        return result
+
+    def get_repeater_samples(self):
+        return self._repeater_samples
+
+    def trace_repeater(self, peer_name: str) -> dict:
+        """Round-trip TRACE to a repeater along its stored path. [trace patch]"""
+        from meshcore_console.meshcore.trace import run_trace, trace_route
+
+        node = getattr(self._session, "_node", None)
+        if not self._connected or node is None:
+            return {"success": False, "reason": "Radio not connected"}
+        peer = self._peers.get(peer_name)
+        if peer is None or not peer.public_key:
+            return {"success": False, "reason": "Unknown repeater"}
+        route, width = trace_route(list(peer.last_path or []), peer.public_key)
+        try:
+            result = self._run_async(
+                run_trace(node=node, route=route, width=width, timeout=20.0), timeout=25.0
+            )
+        except Exception as exc:  # noqa: BLE001
+            result = {"success": False, "reason": str(exc) or type(exc).__name__, "route": route}
+        from meshcore_console.meshcore.trace import log_trace  # [trace-log patch]
+
+        log_trace(self._repeater_samples, peer.public_key, result, self._settings.spreading_factor)
+        return result
 
     def get_self_public_key(self) -> str | None:
         """Return this node's public key as a hex string, or None if unavailable."""
@@ -1122,6 +1463,15 @@ class MeshcoreClient(MeshcoreService):
         book.add_contact({"name": name, "public_key": public_key})
         if path_len_encoded is not None:
             contact = book.get_by_name(name)
+            # [route-pref patch] An advert heard via a relay must not replace a
+            # shorter known route: the last copy to arrive used to win, so a
+            # weak multi-hop copy overwrote the direct route to a nearby repeater.
+            if (
+                contact is not None
+                and getattr(contact, "out_path_len", -1) >= 0
+                and (path_len_encoded & 0x3F) > (contact.out_path_len & 0x3F)
+            ):
+                contact = None
             if contact is not None:
                 contact.out_path = list(inbound_path or b"")
                 contact.out_path_len = path_len_encoded

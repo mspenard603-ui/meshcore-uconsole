@@ -15,12 +15,56 @@ from meshcore_console.core.types import (
 TXT_TYPE_CLI_DATA = 1
 
 
+def _with_list_path(contact: object) -> object:
+    """[route-type patch] PacketBuilder requires out_path as list[int], but the
+    contact book (v1.12) and openhop_core's own PATH handler store bytes, which
+    fails with 'routing_path must be a list'. Hand the builders a shallow copy
+    with a list; the stored contact is left as it is."""
+    out_path = getattr(contact, "out_path", None)
+    if isinstance(out_path, (bytes, bytearray)):
+        import copy
+
+        contact = copy.copy(contact)
+        setattr(contact, "out_path", list(out_path))
+    return contact
+
+
+def _response_key(handler: object, contact: object, tag: int) -> tuple:
+    """[callback-api patch] Key for protocol_response_handler waiters.
+
+    Newer openhop_core matches replies on (full public key, reflected request
+    tag) and takes set_response_callback(pubkey, tag, callback); older builds
+    took (first pubkey byte, callback). Pick whichever this install has.
+    """
+    import inspect
+
+    pubkey = bytes.fromhex(contact.public_key)
+    try:
+        n = len(inspect.signature(handler.set_response_callback).parameters)
+    except (TypeError, ValueError):
+        n = 3
+    return (pubkey, tag & 0xFFFFFFFF) if n >= 3 else (pubkey[0],)
+
+
+def _forget_route(node: MeshNodeProtocol, peer_name: str) -> None:
+    """[route-pref patch] After a request over a multi-hop route times out,
+    forget the route so the next attempt floods; the reply's PATH then
+    teaches a working route (the MeshCore apps reset paths the same way)."""
+    contacts = node.contacts
+    contact = contacts.get_by_name(peer_name) if contacts is not None else None
+    if contact is not None and getattr(contact, "out_path_len", -1) > 0 and (
+        contact.out_path_len & 0x3F
+    ):
+        contact.out_path = []
+        contact.out_path_len = -1
+
+
 def _resolve_contact(node: MeshNodeProtocol, peer_name: str) -> object:
     contacts = node.contacts
     if contacts is not None:
         contact = contacts.get_by_name(peer_name)
         if contact is not None:
-            return contact
+            return _with_list_path(contact)
     raise RuntimeError(f"Contact '{peer_name}' not found")
 
 
@@ -116,7 +160,8 @@ async def request_telemetry(
         response_data["parsed"] = parsed
         response_event.set()
 
-    response_handler.set_response_callback(contact_hash, _on_response)
+    _key = _response_key(response_handler, contact, _ts)  # [callback-api patch]
+    response_handler.set_response_callback(*_key, _on_response)
     t0 = time.monotonic()
     try:
         await node.dispatcher.send_packet(pkt, wait_for_ack=False)
@@ -124,7 +169,7 @@ async def request_telemetry(
     except asyncio.TimeoutError:
         got_response = False
     finally:
-        response_handler.clear_response_callback(contact_hash)
+        response_handler.clear_response_callback(*_key)  # [callback-api patch]
 
     rtt = (time.monotonic() - t0) * 1000
 
@@ -153,7 +198,27 @@ async def request_telemetry(
     }
 
 
+_LOGIN_LOCKS: dict = {}  # [room-chat patch] one login at a time per event loop
+
+
 async def send_login(
+    *,
+    node: MeshNodeProtocol,
+    peer_name: str,
+    password: str,
+    timeout: float = 10.0,
+) -> dict:
+    """Serialised: the login handler has a single callback, so a room login and a
+    repeater login in flight together would steal each other's reply."""
+    loop = asyncio.get_running_loop()
+    lock = _LOGIN_LOCKS.get(id(loop))
+    if lock is None:
+        lock = _LOGIN_LOCKS[id(loop)] = asyncio.Lock()
+    async with lock:
+        return await _send_login_unlocked(node=node, peer_name=peer_name, password=password, timeout=timeout)
+
+
+async def _send_login_unlocked(
     *,
     node: MeshNodeProtocol,
     peer_name: str,
@@ -243,7 +308,14 @@ async def send_repeater_command(
         response_data["text"] = message_text
         response_event.set()
 
-    text_handler.set_command_response_callback(_on_response)
+    # [callback-api patch] newer openhop_core delivers CLI replies to a waiter
+    # keyed by the target's full public key; older builds had one global callback.
+    _target = bytes.fromhex(contact.public_key)
+    _keyed = hasattr(text_handler, "register_command_response")
+    if _keyed:
+        text_handler.register_command_response(_target, _on_response)
+    else:
+        text_handler.set_command_response_callback(_on_response)
     try:
         pkt, _crc = PacketBuilder.create_text_message(
             contact=contact,
@@ -260,6 +332,7 @@ async def send_repeater_command(
             "response_text": response_data["text"],
         }
     except asyncio.TimeoutError:
+        _forget_route(node, peer_name)  # [route-pref patch]
         return {
             "success": False,
             "repeater": peer_name,
@@ -268,7 +341,10 @@ async def send_repeater_command(
             "reason": "Command response timeout",
         }
     finally:
-        text_handler.set_command_response_callback(None)
+        if _keyed:  # [callback-api patch]
+            text_handler.unregister_command_response(_target, _on_response)
+        else:
+            text_handler.set_command_response_callback(None)
 
 
 async def send_advert(

@@ -866,7 +866,7 @@ class AnalyzerView(Gtk.Box):
             self_name = self._service.get_status().node_id
 
             path = PathVisualization(
-                hops=packet.path_hops,
+                hops=list(reversed(packet.path_hops)),
                 peers=all_peers,
                 arrow="←",
                 start=(self_prefix, self_name, None, STYLE_SELF),

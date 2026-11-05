@@ -20,6 +20,36 @@ if TYPE_CHECKING:
     from meshcore_console.core.services import MeshcoreService
 
 
+_REPLY_CSS = {"done": False}
+
+
+def _reply_css() -> None:  # [channel-reply patch] small, quiet arrow; full strength on hover
+    if _REPLY_CSS["done"]:
+        return
+    from gi.repository import Gdk
+
+    provider = Gtk.CssProvider()
+    provider.load_from_data(
+        b".message-reply-btn { min-width: 28px; min-height: 28px; padding: 0 4px; font-size: 20px; color: #aab9cd; }"
+        b".message-reply-btn:hover { color: #e7eef8; }"
+    )
+    Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+    _REPLY_CSS["done"] = True
+
+
+# [leak-fix patch] self._method handlers on the bubble's own children made a
+# reference cycle Python's GC cannot collect: every rebuilt chat leaked its bubbles.
+def _bubble_reply_clicked(btn, message):
+    bubble = btn.get_ancestor(MessageBubble)
+    if bubble is not None:
+        bubble._on_reply_clicked(btn, message)
+
+
+def _bubble_mention_clicked(label, uri):
+    bubble = label.get_ancestor(MessageBubble)
+    return bubble._on_mention_clicked(label, uri) if bubble is not None else False
+
+
 class MessageBubble(Gtk.Box):
     """Chat message bubble with sender badge and directional alignment.
 
@@ -69,6 +99,14 @@ class MessageBubble(Gtk.Box):
             self.set_halign(Gtk.Align.START)
             self.append(badge)
             self.append(bubble)
+            reply = Gtk.Button(label="\u21a9")  # [channel-reply patch] reply-to, after the message
+            reply.add_css_class("flat")
+            reply.add_css_class("message-reply-btn")
+            reply.set_valign(Gtk.Align.CENTER)
+            reply.set_tooltip_text(f"Reply to {message.sender_id}")
+            reply.connect("clicked", _bubble_reply_clicked, message)  # [leak-fix patch]
+            self.append(reply)
+            _reply_css()
 
         # Bubble content
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
@@ -87,7 +125,7 @@ class MessageBubble(Gtk.Box):
         body_label.set_max_width_chars(50)
         body_label.set_xalign(0)
         body_label.add_css_class("message-body")
-        body_label.connect("activate-link", self._on_mention_clicked)
+        body_label.connect("activate-link", _bubble_mention_clicked)  # [leak-fix patch]
         content.append(body_label)
 
         # Meta line (sender for incoming, time for all)
@@ -110,6 +148,14 @@ class MessageBubble(Gtk.Box):
 
         bubble.set_child(content)
         bubble.connect("clicked", on_clicked, message)
+
+    def _on_reply_clicked(self, btn: Gtk.Button, message: Message) -> None:  # [channel-reply patch]
+        """Hand the reply to the Messages view (it owns the compose box)."""
+        widget = self.get_parent()
+        while widget is not None and not hasattr(widget, "_on_message_reply_clicked"):
+            widget = widget.get_parent()
+        if widget is not None:
+            widget._on_message_reply_clicked(btn, message)
 
     def _on_mention_clicked(self, label: Gtk.Label, uri: str) -> bool:
         """Handle clicks on @mention links — navigate to the peer."""

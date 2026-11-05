@@ -84,10 +84,17 @@ class MainWindow(Adw.ApplicationWindow):
         self._stack.set_hexpand(True)
         self._stack.set_vexpand(True)
         self._stack.add_named(AnalyzerView(self._service, self._event_store, layout), "analyzer")
-        self._stack.add_named(PeersView(self._service, self._event_store, layout), "peers")
+        # [rooms patch] one PeersView per tab; "peers" stays the Repeaters page so
+        # existing jumps to it keep working (contacts and rooms are routed below)
+        self._stack.add_named(PeersView(self._service, self._event_store, layout, kind="contacts"), "contacts")
+        self._stack.add_named(PeersView(self._service, self._event_store, layout, kind="rooms"), "rooms")
+        # [admin-fold patch] Admin lives inside Repeaters (Status / Admin tabs)
+        _repeaters = PeersView(self._service, self._event_store, layout, kind="repeaters")
+        _repeaters.attach_admin(AdminView(self._service, self._event_store, layout))
+        self._stack.add_named(_repeaters, "peers")
         self._stack.add_named(MessagesView(self._service, self._event_store, layout), "messages")
         self._stack.add_named(MapView(self._service, self._event_store, layout), "map")
-        self._stack.add_named(AdminView(self._service, self._event_store, layout), "admin")
+        # [admin-fold patch] (Admin page: see Repeaters)
         self._stack.add_named(SettingsView(self._service), "settings")
         self._stack.set_visible_child_name("analyzer")
 
@@ -98,7 +105,18 @@ class MainWindow(Adw.ApplicationWindow):
         content_pane.add_css_class("content-pane")
         content_pane.set_hexpand(True)
         content_pane.set_vexpand(True)
-        content_pane.append(self._stack)
+        # [fit-screen patch] pages scroll vertically instead of forcing the
+        # window taller than the screen
+        self._page_scroll = Gtk.ScrolledWindow()
+        self._page_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self._page_scroll.set_propagate_natural_height(False)
+        self._page_scroll.set_hexpand(True)
+        self._page_scroll.set_vexpand(True)
+        self._stack.set_vhomogeneous(False)  # each page only as tall as itself needs
+        self._page_scroll.set_child(self._stack)
+        content_pane.append(self._page_scroll)
+        self._overflow_logged: set[str] = set()
+        GLib.timeout_add_seconds(5, self._check_page_overflow)
 
         page = build_toolbar_page(header_bar, content_pane)
 
@@ -130,11 +148,12 @@ class MainWindow(Adw.ApplicationWindow):
         # Navigation buttons on the left (set_active called after _stack is created)
         self._nav_buttons: dict[str, Gtk.ToggleButton] = {}
         for label, page_name in [
-            ("Analyzer", "analyzer"),
-            ("Peers", "peers"),
+            ("Analyzer", "analyzer"),  # [rooms patch] Peers split into Contacts / Rooms / Repeaters
             ("Channels", "messages"),
-            ("Map", "map"),
-            ("Admin", "admin"),
+            ("Contacts", "contacts"),
+            ("Rooms", "rooms"),
+            ("Repeaters", "peers"),
+            ("Map", "map"),  # [admin-fold patch] Admin is a tab inside Repeaters
         ]:
             btn = Gtk.ToggleButton.new_with_label(label)
             btn.add_css_class("nav-button")
@@ -152,7 +171,7 @@ class MainWindow(Adw.ApplicationWindow):
         self._subtitle.add_css_class("app-subtitle")
         self._subtitle.set_halign(Gtk.Align.CENTER)
         self._subtitle.set_ellipsize(Pango.EllipsizeMode.END)
-        self._subtitle.set_max_width_chars(28)
+        self._subtitle.set_max_width_chars(36)  # [self-hash patch] room for the hash
         self._subtitle.set_single_line_mode(True)
         title_box.append(title)
         title_box.append(self._subtitle)
@@ -256,6 +275,10 @@ class MainWindow(Adw.ApplicationWindow):
             if popover is not None and popover.get_visible():
                 popover.popdown()
 
+        if page_name == "settings":  # [settings-close patch] remember where Settings was opened from
+            current = self._stack.get_visible_child_name()
+            if current and current != "settings":
+                self._before_settings = current
         if self._stack.get_transition_running():
             saved = self._stack.get_transition_type()
             self._stack.set_transition_type(Gtk.StackTransitionType.NONE)
@@ -264,12 +287,24 @@ class MainWindow(Adw.ApplicationWindow):
         else:
             self._stack.set_visible_child_name(page_name)
 
+    def close_settings(self) -> None:  # [settings-close patch]
+        self.navigate_to(getattr(self, "_before_settings", None) or "analyzer")
+
+    def _page_for_peer(self, peer_id: str) -> str:  # [rooms patch]
+        """Which tab lists this peer: Repeaters (\"peers\"), Rooms or Contacts."""
+        peer = next((p for p in self._service.list_peers() if p.peer_id == peer_id), None)
+        if peer is None or peer.is_repeater:
+            return "peers"
+        return "rooms" if getattr(peer, "node_type", None) == 3 else "contacts"
+
     def navigate_to(self, page_name: str, then: object = None) -> None:
         """Navigate to *page_name* and optionally call *then* on the target view.
 
         *then* should be a ``(method_name, arg)`` tuple — e.g.
         ``("select_peer", peer_id)`` — or ``None`` to just switch pages.
         """
+        if page_name == "peers" and then is not None and then[0] == "select_peer":  # [rooms patch]
+            page_name = self._page_for_peer(then[1])
         # Update the nav buttons first. Deactivating the last active button
         # makes _on_nav_button_toggled switch it back on, which switches the
         # page with it, so a page change before this one gets undone (#85).
@@ -420,6 +455,44 @@ class MainWindow(Adw.ApplicationWindow):
         self._surface_debug_wired = True
         print("[ui-geom] surface debug wired")
         return False
+
+    def _check_page_overflow(self) -> bool:  # [fit-screen patch]
+        """Log (once per page and size) which widgets make a page taller than the window."""
+        try:
+            avail = self._page_scroll.get_height()
+            page = self._stack.get_visible_child()
+            name = self._stack.get_visible_child_name() or "?"
+            if page is None or avail <= 0:
+                return True
+            width = max(1, self._page_scroll.get_width())
+            need = page.measure(Gtk.Orientation.VERTICAL, width)[0]
+            if need <= avail:
+                return True
+            key = f"{name}:{need}"
+            if key in self._overflow_logged:
+                return True
+            self._overflow_logged.add(key)
+            chain = []
+            w = page
+            for _depth in range(14):
+                kids = []
+                c = w.get_first_child()
+                while c is not None:
+                    if c.get_visible():
+                        kids.append((c.measure(Gtk.Orientation.VERTICAL, -1)[0], c))
+                    c = c.get_next_sibling()
+                if not kids:
+                    break
+                h, w = max(kids, key=lambda k: k[0])
+                css = ".".join(w.get_css_classes()[:3])
+                text = w.get_label() if isinstance(w, (Gtk.Label, Gtk.Button)) else ""
+                chain.append(f"{type(w).__name__}{('.' + css) if css else ''}"
+                             f"{(' ' + repr(str(text)[:30])) if text else ''}={h}")
+            logger.warning("[ui-overflow] %s page needs %d px, window gives %d px (scrolls). "
+                           "Tallest chain: %s", name, need, avail, " > ".join(chain))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("overflow check failed: %s", exc)
+        return True
 
     def _debug_geometry_tick(self) -> bool:
         try:
@@ -774,12 +847,13 @@ class MainWindow(Adw.ApplicationWindow):
             return False
 
         mapping = {
-            Gdk.KEY_1: "analyzer",
-            Gdk.KEY_2: "peers",
-            Gdk.KEY_3: "messages",
-            Gdk.KEY_4: "map",
-            Gdk.KEY_5: "admin",
-            Gdk.KEY_6: "settings",
+            Gdk.KEY_1: "analyzer",  # [rooms patch] same order as the tabs
+            Gdk.KEY_2: "messages",
+            Gdk.KEY_3: "contacts",
+            Gdk.KEY_4: "rooms",
+            Gdk.KEY_5: "peers",
+            Gdk.KEY_6: "map",
+            Gdk.KEY_7: "settings",  # [admin-fold patch]
         }
         page = mapping.get(keyval)
         if page is None:
@@ -811,6 +885,27 @@ class MainWindow(Adw.ApplicationWindow):
 
         GLib.idle_add(do_focus)
 
-    @staticmethod
-    def _subtitle_text(node_id: str) -> str:
-        return f"Node: {node_id}" if node_id else "Node: unknown"
+    def _subtitle_text(self, node_id: str) -> str:
+        """'Node: mikes603 · 593A': name plus this node's path hash at the width
+        set by path_hash_mode (0 = 1 byte, 1 = 2, 2 = 3). [self-hash patch]"""
+        text = node_id or "Node: unknown"  # [rooms patch] shorter: 7 tabs share the header
+        try:
+            key = (self._service.get_self_public_key() or "").upper()
+        except Exception:  # noqa: BLE001
+            key = ""
+        if not key:
+            if hasattr(self, "_subtitle"):
+                self._subtitle.set_tooltip_text(None)
+            return text
+        try:
+            mode = int(getattr(self._service.get_settings(), "path_hash_mode", 0) or 0)
+        except Exception:  # noqa: BLE001
+            mode = 0
+        width = min(max(mode, 0), 2) + 1
+        tip = (f"Your path hash: {key[: width * 2]} ({width}-byte, path hash mode {mode}). "
+               f"1-byte: {key[:2]}  2-byte: {key[:4]}  3-byte: {key[:6]}\nPublic key: {key}")
+        if hasattr(self, "_subtitle"):
+            self._subtitle.set_tooltip_text(tip)
+        else:
+            GLib.idle_add(lambda: self._subtitle.set_tooltip_text(tip) and False)
+        return f"{text} \u00b7 {key[: width * 2]}"
