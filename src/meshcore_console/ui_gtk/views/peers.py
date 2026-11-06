@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from typing import TYPE_CHECKING
 
 import gi
@@ -204,6 +205,16 @@ class PeersView(Gtk.Box):
         self._title_hash.set_margin_bottom(8)
         self._title_hash.set_visible(False)
         self._title_row.append(self._title_hash)
+        # Repeaters: ask this repeater to advert, the same icon as the header's own advert.
+        self._title_advert = Gtk.Button.new_from_icon_name("network-transmit-symbolic")
+        self._title_advert.set_tooltip_text("Ask this repeater to send a flood advert")
+        self._title_advert.update_property([Gtk.AccessibleProperty.LABEL], ["Send Advert"])
+        self._title_advert.set_valign(Gtk.Align.CENTER)
+        self._title_advert.set_halign(Gtk.Align.START)
+        self._title_advert.set_margin_top(2)
+        self._title_advert.set_visible(False)
+        self._title_advert.connect("clicked", self._on_title_advert_clicked)
+        self._title_row.append(self._title_advert)
         # Rooms: the "Room server" pill follows the name, Favorite sits at the end.
         self._title_pill = Gtk.Label(label="Room server")
         self._title_pill.add_css_class("status-pill")
@@ -503,12 +514,46 @@ class PeersView(Gtk.Box):
         self._title_hash.set_visible(has_hash)
         if has_hash:  # [title-hash patch] "Name · 59B9", as the header shows this node
             self._title_hash.set_markup(f"\u00b7 <b>{peer.public_key[:4].upper()}</b>")
-        self._title_hash.set_hexpand(has_hash and not is_room)
+        self._title_hash.set_hexpand(False)
+        self._title_advert.set_visible(has_hash)
+        self._title_advert.set_hexpand(has_hash and not is_room)
+        self._title_advert_peer = peer if has_hash else None
         self._details_title.set_hexpand(not is_room and not has_hash)
         self._details_title.set_tooltip_text(peer.display_name if peer is not None else None)
         if is_room:
             self._title_fav.set_label("★ Unfavorite" if peer.is_favorite else "☆ Favorite")
             self._title_fav_peer = peer
+
+    def _on_title_advert_clicked(self, _button: Gtk.Button) -> None:
+        peer = getattr(self, "_title_advert_peer", None)
+        if peer is not None:
+            self._request_repeater_advert(peer)
+
+    def _request_repeater_advert(self, peer: Peer) -> None:
+        """Ask a repeater to flood an advert (firmware CLI 'advert'; admin login only)."""
+        name = peer.display_name
+        state = self._service.get_repeater_login_state(name)
+        if state is None or not state.is_admin:
+            self._toast(f"Log in to {name} as admin to ask it to advert")
+            return
+
+        def work() -> None:
+            error: str | None = None
+            try:
+                result = self._service.send_repeater_command(name, "advert")
+                if not result.get("success"):
+                    error = result.get("reason") or "no response"
+            except Exception as exc:  # noqa: BLE001
+                error = str(exc) or type(exc).__name__
+
+            def done() -> bool:
+                self._toast(f"Advert failed: {error}" if error else f"{name} sent an advert")
+                return False
+
+            GLib.idle_add(done)
+
+        self._toast(f"Asking {name} to advert…")
+        threading.Thread(target=work, daemon=True).start()
 
     def _on_title_fav_clicked(self, button: Gtk.Button) -> None:
         peer = getattr(self, "_title_fav_peer", None)
@@ -1183,6 +1228,15 @@ class PeersView(Gtk.Box):
 
             fav.connect("clicked", _fav_clicked)
             menu.append(fav)
+            advert = Gtk.Button(label="Send Advert")
+            advert.add_css_class("flat")
+
+            def _advert_clicked(_b) -> None:
+                popover.popdown()
+                self._request_repeater_advert(current)
+
+            advert.connect("clicked", _advert_clicked)
+            menu.append(advert)
         button = Gtk.Button(label=f"Delete {kind}…")
         button.add_css_class("flat")
 
