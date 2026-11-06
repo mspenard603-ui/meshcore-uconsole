@@ -84,7 +84,7 @@ def _save_map_view(zoom: float, lat: float, lon: float) -> None:
         logger.warning("Could not save map view: %s", e)
 
 
-_ZOOM_OUT_MS = 250  # double right-click zoom-out animation
+_DOUBLE_CLICK_ZOOM_MS = 250  # double-click zoom in/out animation
 
 _HASH_CSS = {"done": False}
 
@@ -204,12 +204,15 @@ class MapView(Gtk.Box):
         if saved_loc is not None:
             self._viewport.set_location(*saved_loc)
 
-        # Double left-click zooms in (Shumate); double right-click zooms out,
-        # keeping the point under the pointer where it is.
-        zoom_out_click = Gtk.GestureClick.new()
-        zoom_out_click.set_button(3)
-        zoom_out_click.connect("pressed", self._on_right_double_click, map_widget)
-        map_widget.add_controller(zoom_out_click)
+        # Double left-click zooms in, double right-click zooms out; either way
+        # the clicked spot glides to the centre. Replaces Shumate's own
+        # double-click zoom, which keeps the spot under the pointer instead.
+        map_widget.set_zoom_on_double_click(False)
+        for button, step in ((1, +1), (3, -1)):
+            zoom_click = Gtk.GestureClick.new()
+            zoom_click.set_button(button)
+            zoom_click.connect("pressed", self._on_double_click_zoom, map_widget, step)
+            map_widget.add_controller(zoom_click)
 
         # Remember zoom and position across sessions, written once they settle.
         self._view_save_id = 0
@@ -429,42 +432,19 @@ class MapView(Gtk.Box):
         _save_map_view(vp.get_zoom_level(), vp.get_latitude(), vp.get_longitude())
         return False
 
-    def _on_right_double_click(
-        self, _gesture: Gtk.GestureClick, n_press: int, x: float, y: float, map_widget
+    def _on_double_click_zoom(
+        self, _gesture: Gtk.GestureClick, n_press: int, x: float, y: float, map_widget, step: int
     ) -> None:
+        """Zoom one level (step +1 in, -1 out) and glide the clicked spot to the centre."""
         if n_press != 2:
             return
-        current = self._viewport.get_zoom_level()
-        target = max(current - 1, 0)
-        if target == current:
-            return
-        logger.debug("UI: map double right-click zoom out %s -> %s", current, target)
-        import math
-
-        lat, lon = self._viewport.get_latitude(), self._viewport.get_longitude()
-        if not self._following:  # keep the point under the pointer where it is
-            # One level out doubles the map distance per pixel, so the new centre
-            # is the pointer's point plus twice its (Web Mercator) offset to it.
-            p_lat, p_lon = self._viewport.widget_coords_to_location(map_widget, x, y)
-
-            def merc(la: float, lo: float) -> tuple[float, float]:
-                s = math.sin(math.radians(max(-85.0, min(85.0, la))))
-                return (lo + 180.0) / 360.0, 0.5 - math.log((1 + s) / (1 - s)) / (4 * math.pi)
-
-            (px, py), (cx, cy) = merc(p_lat, p_lon), merc(lat, lon)
-            nx, ny = px + 2 * (cx - px), min(1.0, max(0.0, py + 2 * (cy - py)))
-            lon = (nx % 1.0) * 360.0 - 180.0
-            lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * ny))))
-        # Animated, like Shumate's own double-click zoom in. The animation's
-        # moves aren't the user panning: don't let them end follow mode.
-        self._zoom_animating = True
-        map_widget.go_to_full_with_duration(lat, lon, target, _ZOOM_OUT_MS)
-
-        def done() -> bool:
-            self._zoom_animating = False
-            return False
-
-        GLib.timeout_add(_ZOOM_OUT_MS + 100, done)
+        vp = self._viewport
+        current = vp.get_zoom_level()
+        target = min(max(current + step, vp.get_min_zoom_level()), vp.get_max_zoom_level())
+        lat, lon = vp.widget_coords_to_location(map_widget, x, y)
+        logger.debug("UI: map double-click zoom %s -> %s at %.5f,%.5f", current, target, lat, lon)
+        self._set_following(False)  # re-centring away from the device is a pan
+        map_widget.go_to_full_with_duration(lat, lon, target, _DOUBLE_CLICK_ZOOM_MS)
 
     def _on_zoom_in(self, _button: Gtk.Button) -> None:
         """Zoom in on the map."""
@@ -502,11 +482,7 @@ class MapView(Gtk.Box):
 
     def _on_viewport_moved(self, viewport: object, pspec: object) -> None:
         """Disable follow mode when user pans the map."""
-        if (
-            not self._programmatic_move
-            and not getattr(self, "_zoom_animating", False)
-            and self._following
-        ):
+        if not self._programmatic_move and self._following:
             self._set_following(False)
 
     def _set_following(self, active: bool) -> None:
