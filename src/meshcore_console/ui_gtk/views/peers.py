@@ -191,7 +191,19 @@ class PeersView(Gtk.Box):
             orientation=Gtk.Orientation.HORIZONTAL, spacing=8
         )  # [admin-fold patch]
         self._details_title.set_hexpand(True)
+        # A long name ("FrancestownNH DodgeHill") must shorten with an ellipsis:
+        # an unbounded title's natural width pushed the whole window off screen.
+        self._details_title.set_ellipsize(Pango.EllipsizeMode.END)
+        self._details_title.set_max_width_chars(28)
         self._title_row.append(self._details_title)
+        # Repeaters: "· 59B9" hash, kept whole while the name is the part that shortens.
+        self._title_hash = Gtk.Label()
+        self._title_hash.add_css_class("panel-title")
+        self._title_hash.set_halign(Gtk.Align.START)
+        self._title_hash.set_margin_top(10)
+        self._title_hash.set_margin_bottom(8)
+        self._title_hash.set_visible(False)
+        self._title_row.append(self._title_hash)
         # Rooms: the "Room server" pill follows the name, Favorite sits at the end.
         self._title_pill = Gtk.Label(label="Room server")
         self._title_pill.add_css_class("status-pill")
@@ -486,8 +498,14 @@ class PeersView(Gtk.Box):
         )
         self._title_pill.set_visible(is_room)
         self._title_fav.set_visible(is_room)
-        # The title fills the row unless the pill does it, so the pill hugs the name.
-        self._details_title.set_hexpand(not is_room)
+        # The title fills the row unless the pill or hash does, so they hug the name.
+        has_hash = bool(peer is not None and peer.is_repeater and peer.public_key)
+        self._title_hash.set_visible(has_hash)
+        if has_hash:  # [title-hash patch] "Name · 59B9", as the header shows this node
+            self._title_hash.set_markup(f"\u00b7 <b>{peer.public_key[:4].upper()}</b>")
+        self._title_hash.set_hexpand(has_hash and not is_room)
+        self._details_title.set_hexpand(not is_room and not has_hash)
+        self._details_title.set_tooltip_text(peer.display_name if peer is not None else None)
         if is_room:
             self._title_fav.set_label("★ Unfavorite" if peer.is_favorite else "☆ Favorite")
             self._title_fav_peer = peer
@@ -524,12 +542,6 @@ class PeersView(Gtk.Box):
         self._set_room_title(peer)
         is_room = self._title_pill.get_visible()
         self._sync_admin(peer if peer.is_repeater else None)  # [admin-fold patch]
-        if peer.is_repeater and peer.public_key:  # [title-hash patch] hash ID, as on the map
-            self._details_title.set_markup(
-                # "Name · 59B9", as the header shows this node, with the hash in bold
-                f"{GLib.markup_escape_text(peer.display_name)} \u00b7 "
-                f"<b>{peer.public_key[:4].upper()}</b>"
-            )
         if getattr(self, "_admin", None) is not None and peer.is_repeater:  # [repeater-tabs patch]
             self._show_repeater_extras(peer)  # signal, location etc. are in Admin's Status
             return

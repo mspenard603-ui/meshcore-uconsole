@@ -815,24 +815,28 @@ class AdminView(Gtk.Box):
         row.append(btn)
         row.append(self._muted("Auto-poll"))  # [poll-interval patch]
         row.append(self._poll_interval_dropdown(peer))
-        row.append(
-            self._muted("while logged in" if logged_in else "(log in to poll; guest is enough)")
-        )
         self._status_content.append(row)
+        self._status_content.append(
+            self._hint("while logged in" if logged_in else "log in to poll; guest is enough")
+        )
         trow = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)  # [trace-log patch]
         trow.append(self._muted("Auto-trace"))
         trow.append(self._trace_interval_dropdown(peer))
-        trow.append(self._muted("round trip, no login needed; see Graph \u203a Trace"))
+        self._status_content.append(trow)
+        hint = "round trip, no login needed; see Graph \u203a Trace"
         tally = self._retry_tally(self._repeater_key(peer.display_name))  # [trace-retry patch]
         if tally and tally[0]:
-            trow.append(self._muted(f"\u00b7 retry recovered {tally[1]} of {tally[0]} failures"))
-        for box in (row, trow):  # one line each: short labels, plenty of width
-            child = box.get_first_child()
-            while child is not None:
-                if isinstance(child, Gtk.Label):
-                    child.set_wrap(False)
-                child = child.get_next_sibling()
-        self._status_content.append(trow)
+            hint += f" \u00b7 retry recovered {tally[1]} of {tally[0]} failures"
+        self._status_content.append(self._hint(hint))
+
+    def _hint(self, text: str) -> Gtk.Label:
+        """Muted note on its own line under a control row. Wrapped with a capped
+        width: beside the controls, long notes widened the window off screen."""
+        label = self._muted(text)
+        label.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        label.set_max_width_chars(60)
+        label.set_xalign(0.0)
+        return label
 
     @staticmethod
     def _muted(text: str) -> Gtk.Label:

@@ -49,6 +49,20 @@ def main() -> int:
     def admin():
         return view("peers")._admin
 
+    def fit_favourites() -> None:
+        """Frame the favourite repeaters: turning links on leaves the view alone."""
+        m = view("map")
+        m._fit_route(
+            [
+                (p.latitude, p.longitude)
+                for p in m._service.list_peers()
+                if p.is_repeater and p.is_favorite and p.latitude is not None
+            ]
+        )
+
+    def dismiss_toasts() -> None:
+        win()._toast_overlay.dismiss_all()
+
     def graph_mode(label: str) -> None:
         """Click the Repeaters > Graph button labelled *label* (Signal, Packets, ...)."""
         stack = [admin()._graph_page]
@@ -83,7 +97,12 @@ def main() -> int:
         (lambda: select_row(admin()._packets_view._stream, 3), 1.0, "repeater-packets.png"),
         (lambda: admin()._tab_btns[0].set_active(True), 0.3, None),
         (lambda: win().navigate_to("map"), 1.5, None),
-        (lambda: view("map")._fav_links_btn.emit("clicked"), 8.0, "map.png"),
+        # Favourite links button: one click is green (links), a second purple
+        # (links, favourite repeaters only).
+        (fit_favourites, 2.0, None),
+        (lambda: view("map")._fav_links_btn.emit("clicked"), 1.5, None),
+        (lambda: view("map")._fav_links_btn.emit("clicked"), 6.0, None),
+        (dismiss_toasts, 1.0, "map.png"),
     ]
 
     def run(i: int = 0) -> bool:

@@ -86,6 +86,26 @@ def _save_map_view(zoom: float, lat: float, lon: float) -> None:
 
 _DOUBLE_CLICK_ZOOM_MS = 250  # double-click zoom in/out animation
 
+
+def _draw_leader_head(_area, cr, width: int, height: int, angle: float) -> None:
+    """Arrowhead with its tip on the centre (the anchor on the link), pointing at *angle*."""
+    import math
+
+    tip_x, tip_y = width / 2, height / 2
+    back, half = 7.0, 4.0
+    bx, by = tip_x - back * math.cos(angle), tip_y - back * math.sin(angle)
+    nx, ny = -math.sin(angle) * half, math.cos(angle) * half
+    cr.move_to(tip_x, tip_y)
+    cr.line_to(bx + nx, by + ny)
+    cr.line_to(bx - nx, by - ny)
+    cr.close_path()
+    cr.set_source_rgba(0.92, 0.92, 0.92, 1.0)
+    cr.fill_preserve()
+    cr.set_source_rgba(0.0, 0.0, 0.0, 0.8)
+    cr.set_line_width(1.0)
+    cr.stroke()
+
+
 _HASH_CSS = {"done": False}
 
 
@@ -218,6 +238,7 @@ class MapView(Gtk.Box):
         self._view_save_id = 0
         for prop in ("zoom-level", "latitude", "longitude"):
             self._viewport.connect(f"notify::{prop}", self._on_view_changed)
+        self._viewport.connect("notify::zoom-level", self._queue_bubble_layout)
 
         # Detect user panning to disable follow mode
         self._viewport.connect("notify::latitude", self._on_viewport_moved)
@@ -755,6 +776,7 @@ class MapView(Gtk.Box):
 
         if self._device_marker is None:
             self._device_marker = self._create_device_marker(lat, lon)
+            self._device_marker.set_visible(getattr(self, "_fav_mode", "off") != "favs")
             self._marker_layer.add_marker(self._device_marker)
         else:
             self._device_marker.set_location(lat, lon)
@@ -1083,15 +1105,19 @@ class MapView(Gtk.Box):
             self._fav_links_btn.add_css_class("map-control-favs")
             self._show_toast("Favourite repeaters only")
         self._apply_marker_filter()
+        self._queue_bubble_layout()  # hidden names free up room, shown ones take it
 
     def _apply_marker_filter(self) -> None:
         """In favourites-only mode show only favourite repeaters: other repeaters,
-        companions and room servers are hidden (your own marker stays)."""
+        companions, room servers and your own "You" marker are hidden."""
         favs_only = getattr(self, "_fav_mode", "off") == "favs"
         for peer in self._service.list_peers():
             marker = self._peer_markers.get(peer.peer_id)
             if marker is not None:
                 marker.set_visible(not favs_only or (peer.is_repeater and peer.is_favorite))
+        device = getattr(self, "_device_marker", None)
+        if device is not None:
+            device.set_visible(not favs_only)
 
     def _clear_fav_links(self) -> None:
         map_widget = self._map.get_map()
@@ -1101,6 +1127,124 @@ class MapView(Gtk.Box):
             except Exception:  # noqa: BLE001
                 pass
         self._fav_layers = []
+        self._fav_bubbles = []
+        self._remove_fav_leaders()
+
+    # --- SNR bubble placement ---------------------------------------------------
+    # Bubbles start at their link's midpoint; this moves them clear of node names
+    # and of each other (label_layout.place_labels), with a leader arrow back to
+    # the link when one has to sit off it. Pixel distances change only on zoom,
+    # so panning needs no new layout.
+    def _queue_bubble_layout(self, *_args: object) -> None:
+        if not getattr(self, "_fav_bubbles", None):
+            return
+        if getattr(self, "_bubble_layout_id", 0):
+            GLib.source_remove(self._bubble_layout_id)
+        self._bubble_layout_id = GLib.timeout_add(150, self._layout_fav_bubbles)
+
+    def _remove_fav_leaders(self) -> None:
+        map_widget = self._map.get_map()
+        for layer in getattr(self, "_fav_leaders", None) or []:
+            try:
+                map_widget.remove_layer(layer)
+            except Exception:  # noqa: BLE001
+                pass
+        self._fav_leaders = []
+
+    def _layout_fav_bubbles(self) -> bool:
+        import math
+
+        from gi.repository import Gdk
+
+        from meshcore_console.ui_gtk.label_layout import leader_start, place_labels
+
+        self._bubble_layout_id = 0
+        self._remove_fav_leaders()
+        bubbles = getattr(self, "_fav_bubbles", None)
+        if not bubbles:
+            return False
+        map_widget = self._map.get_map()
+        vp = self._viewport
+
+        def px(lat: float, lon: float) -> tuple[float, float]:
+            return vp.location_to_widget_coords(map_widget, lat, lon)
+
+        def size(widget: Gtk.Widget) -> tuple[float, float]:
+            nat = widget.get_preferred_size()[1]
+            return float(nat.width), float(nat.height)
+
+        # Node markers: the dot sits on the coordinate with the name and hash
+        # below it (the box above the dot is an invisible spacer).
+        obstacles = []
+        markers = [
+            (mk, p.latitude, p.longitude)
+            for p in self._service.list_peers()
+            for mk in [self._peer_markers.get(p.peer_id)]
+            if mk is not None and mk.get_visible() and p.latitude is not None
+        ]
+        device = getattr(self, "_device_marker", None)
+        if device is not None and device.get_visible():
+            markers.append((device, device.get_latitude(), device.get_longitude()))
+        for mk, lat, lon in markers:
+            w, h = size(mk.get_child())
+            cx, cy = px(lat, lon)
+            obstacles.append((cx - w / 2, cy - 10, cx + w / 2, cy + h / 2))
+
+        links = [
+            (px(a.latitude, a.longitude), px(b.latitude, b.longitude), size(box))
+            for a, b, _marker, box in bubbles
+        ]
+        spots = place_labels(links, obstacles)
+
+        heads = Shumate.MarkerLayer.new(vp)
+        shaft = Gdk.RGBA()
+        shaft.red = shaft.green = shaft.blue = shaft.alpha = 0.92
+        dark = Gdk.RGBA()
+        dark.red = dark.green = dark.blue = 0.0
+        dark.alpha = 0.8
+        anchor_layer = getattr(self, "_fav_bubble_layer", None)
+        for (_a, _b, marker, _box), (_pa, _pb, bsize), spot in zip(bubbles, links, spots):
+            marker.set_location(*vp.widget_coords_to_location(map_widget, *spot.center))
+            if spot.anchor is None:
+                continue
+            start = leader_start(spot.center, bsize, spot.anchor)
+            ax, ay = spot.anchor
+            angle = math.atan2(ay - start[1], ax - start[0])
+            end = (ax - 6 * math.cos(angle), ay - 6 * math.sin(angle))  # stop at the head
+            line = Shumate.PathLayer.new(vp)
+            line.set_stroke_color(shaft)
+            line.set_stroke_width(1.5)
+            try:
+                line.set_outline_color(dark)
+                line.set_outline_width(1.0)
+            except Exception:  # noqa: BLE001
+                pass
+            for x, y in (end, start):  # add_node prepends
+                line.add_node(
+                    Shumate.Coordinate.new_full(*vp.widget_coords_to_location(map_widget, x, y))
+                )
+            head = Shumate.Marker.new()
+            head.set_location(*vp.widget_coords_to_location(map_widget, ax, ay))
+            arrow = Gtk.DrawingArea()
+            arrow.set_size_request(16, 16)
+            arrow.set_can_target(False)
+            arrow.set_draw_func(_draw_leader_head, angle)
+            head.set_child(arrow)
+            heads.add_marker(head)
+            self._insert_leader_layer(line, anchor_layer)
+            self._fav_leaders.append(line)
+        if self._fav_leaders:
+            self._insert_leader_layer(heads, anchor_layer)
+            self._fav_leaders.append(heads)
+        return False
+
+    def _insert_leader_layer(self, layer, behind) -> None:
+        """Above the link lines, below the bubbles."""
+        map_widget = self._map.get_map()
+        try:
+            map_widget.insert_layer_behind(layer, behind or self._marker_layer)
+        except Exception:  # noqa: BLE001
+            map_widget.add_layer(layer)
 
     def _draw_fav_links(self) -> None:
         import math
@@ -1143,6 +1287,7 @@ class MapView(Gtk.Box):
         map_widget = self._map.get_map()
         bubbles = Shumate.MarkerLayer.new(self._viewport)
         layers = []
+        self._fav_bubbles = []
         edge = Gdk.RGBA()
         edge.red = edge.green = edge.blue = 0.0
         edge.alpha = 0.8
@@ -1193,13 +1338,16 @@ class MapView(Gtk.Box):
             )
             marker.set_child(box)
             bubbles.add_marker(marker)
+            self._fav_bubbles.append((a, b, marker, box))
         if mesh.links:
             try:
                 map_widget.insert_layer_behind(bubbles, self._marker_layer)
             except Exception:  # noqa: BLE001
                 map_widget.add_layer(bubbles)
             layers.append(bubbles)
+            self._fav_bubble_layer = bubbles
             # No auto-fit: turning the links on leaves the zoom and view alone.
+            GLib.idle_add(self._layout_fav_bubbles)  # once the bubbles have a size
         self._fav_layers = layers
 
         n = len(mesh.links)
