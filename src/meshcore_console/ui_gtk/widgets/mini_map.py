@@ -27,7 +27,7 @@ MINI_MAP_SIZE = 520  # px, square
 
 
 class MiniMap(Gtk.Overlay):
-    """A fixed-zoom map centred on a node; click it to open the node on the Map tab.
+    """A fixed-zoom map centred on a node; double-click it to open the node on the Map tab.
 
     The map ignores input so the mouse wheel scrolls the panel it sits in instead of
     zooming. Build one and call ``show_peer`` again on every refresh: re-creating a
@@ -37,6 +37,7 @@ class MiniMap(Gtk.Overlay):
     def __init__(self) -> None:
         super().__init__()
         self._peer_id: str | None = None
+        self._is_room = False
         self.set_size_request(MINI_MAP_SIZE, MINI_MAP_SIZE)
         self.set_halign(Gtk.Align.START)
         # The Shumate map asks to expand and GTK passes that up; keep it at a fixed size.
@@ -44,7 +45,9 @@ class MiniMap(Gtk.Overlay):
         self.set_vexpand(False)
         self.set_overflow(Gtk.Overflow.HIDDEN)
         self.add_css_class("mini-map")
-        self.set_tooltip_text("Open on the Map\nMap data \u00a9 OpenStreetMap contributors")
+        self.set_tooltip_text(
+            "Double-click to open on the Map\nMap data \u00a9 OpenStreetMap contributors"
+        )
 
         self._map = Shumate.SimpleMap.new()
         self._map.set_show_zoom_buttons(False)
@@ -61,28 +64,35 @@ class MiniMap(Gtk.Overlay):
         layer = Shumate.MarkerLayer.new(self._viewport)
         self._map.get_map().add_layer(layer)
         self._marker = Shumate.Marker.new()
-        dot = Gtk.DrawingArea()
-        dot.set_size_request(18, 18)
-        dot.set_draw_func(self._draw_dot)
-        self._marker.set_child(dot)
+        self._dot = Gtk.DrawingArea()
+        self._dot.set_size_request(18, 18)
+        self._dot.set_draw_func(self._draw_dot)
+        self._marker.set_child(self._dot)
         layer.add_marker(self._marker)
 
         self.set_child(self._map)
 
         click = Gtk.GestureClick.new()
-        click.connect("released", self._on_clicked)
+        click.connect("pressed", self._on_clicked)
         self.add_controller(click)
 
     def show_peer(self, peer: Peer) -> None:
         """Centre on *peer*, which must have a latitude and longitude."""
         self._peer_id = peer.peer_id
+        is_room = getattr(peer, "node_type", None) == 3 and not peer.is_repeater
+        if is_room != self._is_room:
+            self._is_room = is_room
+            self._dot.queue_draw()
         self._marker.set_location(peer.latitude, peer.longitude)
         self._viewport.set_zoom_level(MINI_MAP_ZOOM)
         self._viewport.set_location(peer.latitude, peer.longitude)
 
     def _draw_dot(self, _area: Gtk.DrawingArea, cr: object, width: int, height: int) -> None:
         cx, cy = width / 2, height / 2
-        cr.set_source_rgba(0.937, 0.725, 0.247, 1.0)  # mc_warn, as repeaters on the Map
+        if self._is_room:
+            cr.set_source_rgba(0.663, 0.545, 1.0, 1.0)  # violet, as rooms on the Map
+        else:
+            cr.set_source_rgba(0.937, 0.725, 0.247, 1.0)  # mc_warn, as repeaters on the Map
         cr.arc(cx, cy, 7, 0, 2 * math.pi)
         cr.fill()
         cr.set_source_rgba(0.180, 0.235, 0.286, 1.0)  # mc_border
@@ -90,6 +100,6 @@ class MiniMap(Gtk.Overlay):
         cr.set_line_width(2)
         cr.stroke()
 
-    def _on_clicked(self, _gesture: Gtk.GestureClick, _n: int, _x: float, _y: float) -> None:
-        if self._peer_id is not None:
+    def _on_clicked(self, _gesture: Gtk.GestureClick, n_press: int, _x: float, _y: float) -> None:
+        if n_press == 2 and self._peer_id is not None:
             navigate(self, "map", ("focus_peer", self._peer_id))

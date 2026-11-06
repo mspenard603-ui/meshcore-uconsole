@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 
 
 @dataclass(slots=True)
@@ -17,6 +19,8 @@ class MeshcoreSettings:
     suppress_service_dialog: bool = False  # Don't prompt to stop conflicting services
     log_level: str = "INFO"  # stderr log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
     show_radio_error_toasts: bool = False  # Show radio warnings as in-app toast alerts
+    # Repeaters with no advert for this long are removed unless favourited (REPEATER_EXPIRY key)
+    repeater_expiry: str = "never"
 
     # Radio
     radio_preset: str = "meshcore-us"
@@ -58,6 +62,42 @@ class MeshcoreSettings:
 
     def clone(self) -> "MeshcoreSettings":
         return replace(self)
+
+
+# Settings > Repeaters > Remove after: key -> (label, seconds; None = never)
+REPEATER_EXPIRY: dict[str, tuple[str, int | None]] = {
+    "1d": ("1 day", 86_400),
+    "1w": ("1 week", 7 * 86_400),
+    "1m": ("1 month", 30 * 86_400),
+    "6m": ("6 months", 182 * 86_400),
+    "1y": ("1 year", 365 * 86_400),
+    "never": ("Never", None),
+}
+
+
+def expired_repeaters(peers: Iterable, expiry: str, now: datetime) -> list:
+    """Repeaters whose last advert is older than *expiry*, favourites excepted.
+
+    Only adverts set ``last_advert_time``. A repeater with no advert on record
+    is kept: there is nothing to age.
+    """
+    seconds = REPEATER_EXPIRY.get(expiry, ("", None))[1]
+    if seconds is None:
+        return []
+    cutoff = now - timedelta(seconds=seconds)
+
+    def heard(p) -> datetime:  # an old naive time is UTC
+        t = p.last_advert_time
+        return t if t.tzinfo is not None else t.replace(tzinfo=UTC)
+
+    return [
+        p
+        for p in peers
+        if p.is_repeater
+        and not p.is_favorite
+        and p.last_advert_time is not None
+        and heard(p) < cutoff
+    ]
 
 
 RADIO_PRESETS: dict[str, dict[str, int]] = {

@@ -560,6 +560,14 @@ row:focus-visible {
   color: @mc_accent;
 }
 
+/* Favourite links, favourites-only mode: violet, as room markers */
+.map-control-favs,
+.map-control-favs:hover {
+  background: @mc_bg;
+  border: 2px solid #a98bff;
+  color: #a98bff;
+}
+
 .map-details-panel {
   margin: 8px;
   border-left: 1px solid @mc_border;

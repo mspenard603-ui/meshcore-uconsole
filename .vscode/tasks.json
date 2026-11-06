@@ -20,6 +20,53 @@
       "type": "shell",
       "command": "nix develop path:. --command uv run pre-commit run --all-files",
       "problemMatcher": []
+    },
+    {
+      "label": "uConsole: sync",
+      "type": "shell",
+      "command": "./scripts/uconsole.sh sync",
+      "problemMatcher": []
+    },
+    // The four tasks below get status bar buttons through the "Tasks"
+    // extension (actboy168.tasks); see .vscode/settings.json.
+    {
+      "label": "uConsole: run (radio)",
+      "detail": "Sync, then run on the uConsole with the real radio",
+      "type": "shell",
+      "command": "./scripts/uconsole.sh run",
+      "problemMatcher": [],
+      "options": { "statusbar": { "label": "$(radio-tower) Radio", "hide": false } }
+    },
+    {
+      "label": "uConsole: run (mock)",
+      "detail": "Sync, then run on the uConsole with simulated radio events",
+      "type": "shell",
+      "command": "./scripts/uconsole.sh run --mock",
+      "problemMatcher": [],
+      "options": { "statusbar": { "label": "$(beaker) Mock", "hide": false } }
+    },
+    {
+      "label": "uConsole: stop app",
+      "detail": "Close the app on the uConsole",
+      "type": "shell",
+      "command": "./scripts/uconsole.sh stop",
+      "problemMatcher": [],
+      "options": { "statusbar": { "label": "$(debug-stop) Stop", "hide": false } }
+    },
+    {
+      "label": "uConsole: bootstrap venv",
+      "detail": "Sync and rebuild the uConsole's .venv (after pyproject.toml / uv.lock changes)",
+      "type": "shell",
+      "command": "./scripts/uconsole.sh bootstrap",
+      "problemMatcher": [],
+      "options": { "statusbar": { "label": "$(package) Venv", "hide": false } }
+    },
+    {
+      "label": "uConsole: live dev (auto-restart)",
+      "type": "shell",
+      "command": "./scripts/uconsole.sh dev",
+      "isBackground": true,
+      "problemMatcher": []
     }
   ]
 }

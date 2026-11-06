@@ -19,6 +19,8 @@ from meshcore_console.core.models import Peer
 from meshcore_console.core.radio import format_rssi, format_snr
 from meshcore_console.core.services import MeshcoreService
 from meshcore_console.ui_gtk.helpers import clear_children, clear_listbox, navigate
+from meshcore_console.ui_gtk.widgets.mini_map import SHUMATE_AVAILABLE as MINI_MAP_AVAILABLE
+from meshcore_console.ui_gtk.widgets.mini_map import MiniMap
 from meshcore_console.ui_gtk.layout import Layout
 from meshcore_console.ui_gtk.state import UiEventStore
 from meshcore_console.core.time import to_local
@@ -125,6 +127,8 @@ class PeersView(Gtk.Box):
         contacts_column = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         contacts_column.add_css_class("panel-card")
         contacts_column.set_size_request(layout.peers_list_width, -1)
+        if kind == "rooms":  # the room chat gets the spare width, as Channels' chat does
+            contacts_column.set_hexpand(False)
 
         # [clear-peers patch] header with Clear button
         contacts_column.append(
@@ -188,6 +192,21 @@ class PeersView(Gtk.Box):
         )  # [admin-fold patch]
         self._details_title.set_hexpand(True)
         self._title_row.append(self._details_title)
+        # Rooms: the "Room server" pill follows the name, Favorite sits at the end.
+        self._title_pill = Gtk.Label(label="Room server")
+        self._title_pill.add_css_class("status-pill")
+        self._title_pill.add_css_class("room")
+        self._title_pill.set_valign(Gtk.Align.CENTER)
+        self._title_pill.set_hexpand(True)
+        self._title_pill.set_halign(Gtk.Align.START)
+        self._title_pill.set_visible(False)
+        self._title_row.append(self._title_pill)
+        self._title_fav = Gtk.Button()
+        self._title_fav.set_valign(Gtk.Align.CENTER)
+        self._title_fav.set_margin_end(12)
+        self._title_fav.set_visible(False)
+        self._title_fav.connect("clicked", self._on_title_fav_clicked)
+        self._title_row.append(self._title_fav)
         details_column.append(self._title_row)
 
         self._details_scroll = Gtk.ScrolledWindow.new()
@@ -400,11 +419,7 @@ class PeersView(Gtk.Box):
             self._render_telemetry(cached)
         actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         actions.set_margin_top(16)
-        fav_btn = Gtk.Button.new_with_label(
-            "\u2606 Favorite" if not peer.is_favorite else "\u2605 Unfavorite"
-        )
-        fav_btn.connect("clicked", self._on_toggle_favorite_clicked, peer)
-        actions.append(fav_btn)
+        # Favorite is in the header by Trace, shared by every repeater tab.
         telem_btn = Gtk.Button.new_with_label("Request Telemetry")
         telem_btn.connect("clicked", self._on_request_telemetry_clicked, peer)
         actions.append(telem_btn)
@@ -447,8 +462,44 @@ class PeersView(Gtk.Box):
         is_room = getattr(peer, "node_type", None) == 3
         return is_room if self._kind == "rooms" else self._kind == "contacts" and not is_room
 
+    def _add_mini_map(self, peer: Peer) -> None:
+        """Small map around a room server, as on a repeater's Status. One map is
+        kept and re-centred: details are rebuilt often, a new map refetches tiles."""
+        if not MINI_MAP_AVAILABLE:
+            return
+        if getattr(self, "_mini_map", None) is None:
+            self._mini_map = MiniMap()
+            self._mini_map.set_margin_top(4)
+        parent = self._mini_map.get_parent()
+        if parent is not None:
+            parent.remove(self._mini_map)
+        self._mini_map.show_peer(peer)
+        self._details_content.append(self._mini_map)
+
+    def _set_room_title(self, peer: Peer | None) -> None:
+        """Show the room pill and Favorite button in the title row for a room server."""
+        is_room = (
+            peer is not None
+            and self._kind == "rooms"
+            and getattr(peer, "node_type", None) == 3
+            and not peer.is_repeater
+        )
+        self._title_pill.set_visible(is_room)
+        self._title_fav.set_visible(is_room)
+        # The title fills the row unless the pill does it, so the pill hugs the name.
+        self._details_title.set_hexpand(not is_room)
+        if is_room:
+            self._title_fav.set_label("★ Unfavorite" if peer.is_favorite else "☆ Favorite")
+            self._title_fav_peer = peer
+
+    def _on_title_fav_clicked(self, button: Gtk.Button) -> None:
+        peer = getattr(self, "_title_fav_peer", None)
+        if peer is not None:
+            self._on_toggle_favorite_clicked(button, peer)
+
     def _show_empty_details(self) -> None:
         """Show empty state in details panel."""
+        self._set_room_title(None)
         self._details_title.set_text("Peer Details")
         self._sync_admin(None)  # [admin-fold patch]
         self._clear_details()
@@ -470,12 +521,14 @@ class PeersView(Gtk.Box):
     def _show_peer_details(self, peer: Peer) -> None:
         """Show details for a selected peer."""
         self._details_title.set_text(peer.display_name)
+        self._set_room_title(peer)
+        is_room = self._title_pill.get_visible()
         self._sync_admin(peer if peer.is_repeater else None)  # [admin-fold patch]
         if peer.is_repeater and peer.public_key:  # [title-hash patch] hash ID, as on the map
             self._details_title.set_markup(
-                f"{GLib.markup_escape_text(peer.display_name)}  "
-                f"<span font_family='DejaVu Sans Mono' background='#a07828' foreground='#ffe880' "
-                f"size='smaller'> {peer.public_key[:4].upper()} </span>"
+                # "Name · 59B9", as the header shows this node, with the hash in bold
+                f"{GLib.markup_escape_text(peer.display_name)} \u00b7 "
+                f"<b>{peer.public_key[:4].upper()}</b>"
             )
         if getattr(self, "_admin", None) is not None and peer.is_repeater:  # [repeater-tabs patch]
             self._show_repeater_extras(peer)  # signal, location etc. are in Admin's Status
@@ -503,7 +556,8 @@ class PeersView(Gtk.Box):
             else "ok"
         )
         type_label.set_halign(Gtk.Align.START)
-        self._details_content.append(type_label)
+        if not is_room:  # rooms show it in the title row
+            self._details_content.append(type_label)
 
         # === Signal Section ===
         self._add_section_header("Signal")
@@ -531,6 +585,8 @@ class PeersView(Gtk.Box):
             if peer.location_updated:
                 loc_time = to_local(peer.location_updated).strftime("%b %d at %H:%M")
                 self._details_content.append(DetailRow("Updated:", loc_time))
+            if is_room and _has_location(peer.latitude, peer.longitude):
+                self._add_mini_map(peer)
         else:
             no_loc = Gtk.Label(label="No location reported")
             no_loc.add_css_class("panel-muted")
@@ -633,22 +689,26 @@ class PeersView(Gtk.Box):
         actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         actions.set_margin_top(16)
 
-        fav_label = "☆ Favorite" if not peer.is_favorite else "★ Unfavorite"
-        fav_btn = Gtk.Button.new_with_label(fav_label)
-        fav_btn.connect("clicked", self._on_toggle_favorite_clicked, peer)
-        actions.append(fav_btn)
+        # Rooms: Favorite is in the title row, and posting is the room panel's Post.
+        if not is_room:
+            fav_label = "☆ Favorite" if not peer.is_favorite else "★ Unfavorite"
+            fav_btn = Gtk.Button.new_with_label(fav_label)
+            fav_btn.connect("clicked", self._on_toggle_favorite_clicked, peer)
+            actions.append(fav_btn)
 
-        if not peer.is_repeater:
+        if not peer.is_repeater and not is_room:
             message_btn = Gtk.Button.new_with_label("Send Message")
             message_btn.add_css_class("suggested-action")
             message_btn.connect("clicked", self._on_send_message_clicked, peer)
             actions.append(message_btn)
 
-        telem_btn = Gtk.Button.new_with_label("Request Telemetry")
-        telem_btn.connect("clicked", self._on_request_telemetry_clicked, peer)
-        actions.append(telem_btn)
+        if not is_room:  # room servers don't answer telemetry requests
+            telem_btn = Gtk.Button.new_with_label("Request Telemetry")
+            telem_btn.connect("clicked", self._on_request_telemetry_clicked, peer)
+            actions.append(telem_btn)
 
-        self._details_content.append(actions)
+        if actions.get_first_child() is not None:  # rooms have no buttons left here
+            self._details_content.append(actions)
 
     _TRACE_SOURCES = {
         "auto": "auto-trace",
@@ -1067,6 +1127,20 @@ class PeersView(Gtk.Box):
         click.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         click.connect("pressed", self._on_row_right_click, peer)  # [leak-fix patch] no row ref
         row.add_controller(click)
+        if peer.is_repeater:  # double-click: show it on the full Map
+            double = Gtk.GestureClick.new()
+            double.set_button(1)
+            double.connect("pressed", self._on_row_double_click, peer.peer_id)
+            row.add_controller(double)
+
+    def _on_row_double_click(self, _gesture, n_press: int, _x: float, _y: float, peer_id) -> None:
+        if n_press != 2:
+            return  # a single click just selects, as before
+        peer = next((p for p in self._service.list_peers() if p.peer_id == peer_id), None)
+        if peer is None or not _has_location(peer.latitude, peer.longitude):
+            self._toast("No location for that repeater yet")
+            return
+        navigate(self, "map", ("focus_peer", peer_id))
 
     def _on_row_right_click(self, gesture, _n_press, x: float, y: float, peer: Peer) -> None:
         from gi.repository import Gdk
@@ -1079,6 +1153,24 @@ class PeersView(Gtk.Box):
         rect.x, rect.y, rect.width, rect.height = int(x), int(y), 1, 1
         popover.set_pointing_to(rect)
         kind = "repeater" if peer.is_repeater else "contact"
+        menu = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        if peer.is_repeater:
+            current = next(
+                (p for p in self._service.list_peers() if p.peer_id == peer.peer_id), peer
+            )
+            fav = Gtk.Button(label="★ Unfavorite" if current.is_favorite else "☆ Favorite")
+            fav.add_css_class("flat")
+
+            def _fav_clicked(_b) -> None:
+                popover.popdown()
+                self._on_toggle_favorite_clicked(_b, current)
+                admin = getattr(self, "_admin", None)
+                sel = self._selected_peer
+                if admin is not None and sel is not None and sel.peer_id == current.peer_id:
+                    admin._update_admin_path(current)  # relabel the header's Favorite
+
+            fav.connect("clicked", _fav_clicked)
+            menu.append(fav)
         button = Gtk.Button(label=f"Delete {kind}…")
         button.add_css_class("flat")
 
@@ -1087,7 +1179,8 @@ class PeersView(Gtk.Box):
             self._confirm_delete_peer(peer)
 
         button.connect("clicked", _clicked)
-        popover.set_child(button)
+        menu.append(button)
+        popover.set_child(menu)
         popover.connect("closed", lambda p: GLib.idle_add(p.unparent))
         popover.popup()
 

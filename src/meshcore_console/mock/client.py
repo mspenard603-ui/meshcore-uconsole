@@ -287,6 +287,17 @@ class MockMeshcoreClient(MeshcoreService):
         del self._peers[name]
         return True
 
+    def expire_repeaters(self, now: datetime | None = None) -> int:
+        """Remove repeaters unheard for longer than the expiry setting."""
+        from meshcore_console.meshcore.settings import expired_repeaters
+
+        doomed = expired_repeaters(
+            self._peers.values(), self._settings.repeater_expiry, now or datetime.now(UTC)
+        )
+        for peer in doomed:
+            self.delete_peer(peer.peer_id)
+        return len(doomed)
+
     def delete_peers(self, repeaters: bool, keep_favorites: bool = False) -> int:
         """Delete every contact or every repeater. [clear-peers patch]"""
         doomed = [

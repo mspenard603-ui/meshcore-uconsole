@@ -112,6 +112,17 @@ class UConsoleGps:
             logger.debug("GPS: RPi.GPIO not available, skipping GPIO enable")
         except (RuntimeError, OSError) as e:
             self._report_error(f"GPIO enable failed: {e}")
+        except Exception as e:  # noqa: BLE001
+            # rpi-lgpio (Debian trixie) raises lgpio.error, e.g. 'GPIO not
+            # allocated' when the pin is already claimed. With the hg-aiov2
+            # preset GPIO 27 is also the LoRa enable pin, which the radio has
+            # already claimed and driven HIGH. Never let this abort connect():
+            # the GPS is read over serial below either way.
+            logger.info(
+                "GPS: enable pin %d not available (%s); continuing with serial only",
+                self.GPIO_ENABLE_PIN,
+                e,
+            )
 
         # Open serial port
         try:

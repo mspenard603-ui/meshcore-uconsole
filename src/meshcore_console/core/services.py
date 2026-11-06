@@ -6,6 +6,8 @@ from meshcore_console.core.models import Channel, DeviceStatus, Message, Peer, R
 from meshcore_console.core.types import MeshEventDict, SendResultDict
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from meshcore_console.meshcore.settings import MeshcoreSettings
 
 
@@ -106,6 +108,10 @@ class MeshcoreService(Protocol):
 
     def delete_peer(self, peer_id: str) -> bool:
         """Delete one contact or repeater. [delete-peer patch]"""
+        ...
+
+    def expire_repeaters(self, now: datetime | None = None) -> int:
+        """Remove repeaters not heard within the repeater_expiry setting (favourites kept)."""
         ...
 
     def delete_peers(self, repeaters: bool, keep_favorites: bool = False) -> int:

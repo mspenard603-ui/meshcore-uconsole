@@ -187,3 +187,29 @@ def test_create_gps_provider_autodetects_cm5_port() -> None:
         provider = create_gps_provider()
         assert isinstance(provider, UConsoleGps)
         assert provider._serial_port == "/dev/ttyAMA0"
+
+
+def test_gps_enable_pin_error_does_not_abort_start(monkeypatch) -> None:
+    """rpi-lgpio raises lgpio.error (not RuntimeError/OSError) for a claimed pin.
+
+    On the hg-aiov2 preset the radio already holds GPIO 27; that error used to
+    escape start() and make connect() fail after the radio was up.
+    """
+    import sys
+    import types
+
+    class LgpioError(Exception):
+        pass
+
+    def setup(_pin, _mode):
+        raise LgpioError("GPIO not allocated")
+
+    gpio = types.SimpleNamespace(BCM=11, OUT=0, HIGH=1, setmode=lambda _m: None, setup=setup)
+    rpi = types.ModuleType("RPi")
+    rpi.GPIO = gpio
+    monkeypatch.setitem(sys.modules, "RPi", rpi)
+    monkeypatch.setitem(sys.modules, "RPi.GPIO", gpio)
+
+    provider = UConsoleGps(serial_port="/nonexistent/gps-test-port")
+    provider.start()  # must not raise
+    provider.stop()

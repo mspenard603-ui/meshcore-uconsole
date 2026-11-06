@@ -224,6 +224,12 @@ class AdminView(Gtk.Box):
         self._admin_path_box.set_margin_end(12)
         self._admin_path_box.set_hexpand(True)
         title_row.append(self._admin_path_box)
+        # Favorite sits by Trace so it's on every repeater tab, not just Status.
+        self._fav_btn = Gtk.Button(label="☆ Favorite")
+        self._fav_btn.set_valign(Gtk.Align.CENTER)
+        self._fav_btn.set_margin_top(6)
+        self._fav_btn.connect("clicked", self._on_fav_clicked)
+        title_row.append(self._fav_btn)
         self._trace_btn = Gtk.Button(label="Trace")  # [trace patch]
         self._trace_btn.set_tooltip_text(
             "Round-trip TRACE along this path: SNR for every link, both ways"
@@ -1303,6 +1309,7 @@ class AdminView(Gtk.Box):
 
         clear_children(self._admin_path_box)
         current = next((p for p in self._service.list_peers() if p.peer_id == peer.peer_id), peer)
+        self._fav_btn.set_label("★ Unfavorite" if current.is_favorite else "☆ Favorite")
         self_key = self._service.get_self_public_key()
         self_prefix = (self_key or "")[:2].upper() or "Me"
         self_name = self._service.get_status().node_id
@@ -1497,6 +1504,15 @@ class AdminView(Gtk.Box):
             GLib.idle_add(done)
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _on_fav_clicked(self, _btn: Gtk.Button) -> None:
+        peer = self._selected_repeater
+        if peer is None:
+            return
+        current = next((p for p in self._service.list_peers() if p.peer_id == peer.peer_id), peer)
+        logger.debug("UI: toggle favorite repeater=%s", current.display_name)
+        self._service.set_favorite(current.peer_id, not current.is_favorite)
+        self._update_admin_path(current)  # relabels the button
 
     def _on_trace_clicked(self, btn: Gtk.Button) -> None:
         peer = self._selected_repeater

@@ -26,12 +26,14 @@ from meshcore_console.meshcore.packet_codec import repair_utf8
 from meshcore_console.meshcore.packet_store import PacketStore
 from meshcore_console.meshcore.repeater_store import RepeaterPasswordStore
 from meshcore_console.meshcore.session import OpenHopCoreSession
-from meshcore_console.meshcore.settings import MeshcoreSettings
+from meshcore_console.meshcore.settings import MeshcoreSettings, expired_repeaters
 from meshcore_console.meshcore.settings_store import SettingsStore
 from meshcore_console.meshcore.state_store import MessageStore, PeerStore, UIChannelStore
 from meshcore_console.platform.gps import GpsProvider, create_gps_provider
 
 logger = logging.getLogger(__name__)
+
+_EXPIRY_CHECK_SECONDS = 600  # how often poll_events looks for expired repeaters
 
 _ROUTING_FIELDS = ("path_hops", "path_len", "snr", "rssi")
 
@@ -471,6 +473,8 @@ class MeshcoreClient(MeshcoreService):
         if self._event_buffer:
             events.extend(self._event_buffer)
             self._event_buffer.clear()
+
+        self._maybe_expire_repeaters()
 
         # Enrich packet events with sender names before processing/persisting
         self._enrich_sender_names(events)
@@ -1102,8 +1106,11 @@ class MeshcoreClient(MeshcoreService):
     def update_settings(self, settings: MeshcoreSettings) -> None:
         updated = settings.clone()
         gps_device_changed = updated.gps_device != self._settings.gps_device
+        expiry_changed = updated.repeater_expiry != self._settings.repeater_expiry
         self._settings = updated
         self._settings_store.save(updated)
+        if expiry_changed:
+            self.expire_repeaters()  # a shorter period applies now, not at the next check
         self._config = runtime_config_from_settings(self._settings)
 
         # Rebuild the GPS provider if the device path changed, so the setting
@@ -1193,6 +1200,35 @@ class MeshcoreClient(MeshcoreService):
             book = self._session.contact_book
             book.contacts[:] = [c for c in book.contacts if c.public_key != peer.public_key]
         return True
+
+    def expire_repeaters(self, now: datetime | None = None) -> int:
+        """Remove repeaters unheard for longer than Settings > Repeaters > Remove
+        after, favourites excepted. Returns how many went."""
+        doomed = expired_repeaters(
+            self._peers.values(), self._settings.repeater_expiry, now or datetime.now(UTC)
+        )
+        for peer in doomed:
+            self.delete_peer(peer.peer_id)
+        if doomed:
+            logger.info(
+                "Removed %d repeater(s) not heard for %s: %s",
+                len(doomed),
+                self._settings.repeater_expiry,
+                ", ".join(p.display_name for p in doomed),
+            )
+        return len(doomed)
+
+    def _maybe_expire_repeaters(self) -> None:
+        import time as _time
+
+        now = _time.monotonic()
+        if now < getattr(self, "_next_expiry_check", 0.0):
+            return
+        self._next_expiry_check = now + _EXPIRY_CHECK_SECONDS
+        try:
+            self.expire_repeaters()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Repeater expiry check failed: %s", exc)
 
     def delete_peers(self, repeaters: bool, keep_favorites: bool = False) -> int:
         """Delete every contact or every repeater. [clear-peers patch]"""

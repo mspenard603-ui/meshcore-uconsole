@@ -42,6 +42,50 @@ CARTO_DARK_URL = "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
 OSM_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 
 
+def _map_state_file():
+    from meshcore_console.meshcore.paths import config_dir
+
+    return config_dir() / "map_view.json"
+
+
+def _load_map_view() -> tuple[float | None, tuple[float, float] | None]:
+    """(zoom, (lat, lon)) saved by the last session; either may be None."""
+    import json
+    import math
+
+    try:
+        data = json.loads(_map_state_file().read_text())
+        zoom, lat, lon = data.get("zoom"), data.get("lat"), data.get("lon")
+    except (OSError, ValueError, AttributeError):
+        return None, None
+
+    def num(v: object) -> bool:
+        return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+    good_zoom = float(zoom) if num(zoom) and 0 <= zoom <= 20 else None
+    good_loc = (
+        (float(lat), float(lon))
+        if num(lat) and num(lon) and -90 <= lat <= 90 and -180 <= lon <= 180
+        else None
+    )
+    return good_zoom, good_loc
+
+
+def _save_map_view(zoom: float, lat: float, lon: float) -> None:
+    import json
+
+    try:
+        path = _map_state_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps({"zoom": round(zoom, 2), "lat": round(lat, 6), "lon": round(lon, 6)})
+        )
+    except OSError as e:
+        logger.warning("Could not save map view: %s", e)
+
+
+_ZOOM_OUT_MS = 250  # double right-click zoom-out animation
+
 _HASH_CSS = {"done": False}
 
 
@@ -54,6 +98,8 @@ def _marker_hash_css() -> None:  # [marker-hash patch]
     provider.load_from_data(
         b".map-marker-hash { font-family: 'DejaVu Sans Mono', monospace; font-size: 11px; font-weight: 700;"
         b" color: #ffe880; background: rgba(160, 120, 40, 0.92); border-radius: 3px; padding: 0 4px; }"
+        b".map-marker-elev { font-family: 'DejaVu Sans Mono', monospace; font-size: 11px; font-weight: 700;"
+        b" color: #b8f5df; background: rgba(25, 120, 90, 0.92); border-radius: 3px; padding: 0 4px; }"
     )
     Gtk.StyleContext.add_provider_for_display(
         Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
@@ -76,6 +122,10 @@ class MapView(Gtk.Box):
         self._last_peer_count = 0
         self._shown_gps_errors: set[str] = set()  # Track shown errors to avoid repeats
         self._following = False  # Whether map follows device location
+        from meshcore_console.platform.elevation import get_store
+
+        self._elevation = get_store()
+        self._elevation.add_listener(self._on_elevation_tile)
         self._programmatic_move = False  # Suppress follow-disable during go_to
 
         if not SHUMATE_AVAILABLE:
@@ -148,6 +198,23 @@ class MapView(Gtk.Box):
             # Centered on US
             self._viewport.set_zoom_level(4)
             self._viewport.set_location(39.8283, -98.5795)
+        saved_zoom, saved_loc = _load_map_view()
+        if saved_zoom is not None:
+            self._viewport.set_zoom_level(saved_zoom)
+        if saved_loc is not None:
+            self._viewport.set_location(*saved_loc)
+
+        # Double left-click zooms in (Shumate); double right-click zooms out,
+        # keeping the point under the pointer where it is.
+        zoom_out_click = Gtk.GestureClick.new()
+        zoom_out_click.set_button(3)
+        zoom_out_click.connect("pressed", self._on_right_double_click, map_widget)
+        map_widget.add_controller(zoom_out_click)
+
+        # Remember zoom and position across sessions, written once they settle.
+        self._view_save_id = 0
+        for prop in ("zoom-level", "latitude", "longitude"):
+            self._viewport.connect(f"notify::{prop}", self._on_view_changed)
 
         # Detect user panning to disable follow mode
         self._viewport.connect("notify::latitude", self._on_viewport_moved)
@@ -240,16 +307,16 @@ class MapView(Gtk.Box):
         zoom_box.set_margin_end(12)
         zoom_box.set_margin_bottom(12)
 
-        # [favorite-links patch] plot which favourite repeaters hear each other
+        # [favorite-links patch] plot which favourite repeaters hear each other.
+        # Three states, one per click: off -> links (green) -> favourites only
+        # (purple: links, and every other repeater hidden) -> off.
+        self._fav_mode = "off"
         self._fav_links_btn = Gtk.Button()
         icon = Gtk.DrawingArea()
         icon.set_size_request(18, 18)
         icon.set_draw_func(self._draw_fav_links_icon)
         self._fav_links_btn.set_child(icon)
         self._fav_links_btn.add_css_class("map-control-button")
-        self._fav_links_btn.set_tooltip_text(
-            "Show links between favourite repeaters that hear each other"
-        )
         self._fav_links_btn.update_property(
             [Gtk.AccessibleProperty.LABEL], ["Favourite repeater links"]
         )
@@ -351,6 +418,54 @@ class MapView(Gtk.Box):
         share = 2 / 3 if getattr(self, "_panel_wide", False) else 1 / 3
         self._details_panel.set_size_request(int(total * share) - 16, -1)  # 16 = panel margins
 
+    def _on_view_changed(self, _viewport: object, _pspec: object) -> None:
+        if self._view_save_id:
+            GLib.source_remove(self._view_save_id)
+        self._view_save_id = GLib.timeout_add(500, self._save_view_now)
+
+    def _save_view_now(self) -> bool:
+        self._view_save_id = 0
+        vp = self._viewport
+        _save_map_view(vp.get_zoom_level(), vp.get_latitude(), vp.get_longitude())
+        return False
+
+    def _on_right_double_click(
+        self, _gesture: Gtk.GestureClick, n_press: int, x: float, y: float, map_widget
+    ) -> None:
+        if n_press != 2:
+            return
+        current = self._viewport.get_zoom_level()
+        target = max(current - 1, 0)
+        if target == current:
+            return
+        logger.debug("UI: map double right-click zoom out %s -> %s", current, target)
+        import math
+
+        lat, lon = self._viewport.get_latitude(), self._viewport.get_longitude()
+        if not self._following:  # keep the point under the pointer where it is
+            # One level out doubles the map distance per pixel, so the new centre
+            # is the pointer's point plus twice its (Web Mercator) offset to it.
+            p_lat, p_lon = self._viewport.widget_coords_to_location(map_widget, x, y)
+
+            def merc(la: float, lo: float) -> tuple[float, float]:
+                s = math.sin(math.radians(max(-85.0, min(85.0, la))))
+                return (lo + 180.0) / 360.0, 0.5 - math.log((1 + s) / (1 - s)) / (4 * math.pi)
+
+            (px, py), (cx, cy) = merc(p_lat, p_lon), merc(lat, lon)
+            nx, ny = px + 2 * (cx - px), min(1.0, max(0.0, py + 2 * (cy - py)))
+            lon = (nx % 1.0) * 360.0 - 180.0
+            lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * ny))))
+        # Animated, like Shumate's own double-click zoom in. The animation's
+        # moves aren't the user panning: don't let them end follow mode.
+        self._zoom_animating = True
+        map_widget.go_to_full_with_duration(lat, lon, target, _ZOOM_OUT_MS)
+
+        def done() -> bool:
+            self._zoom_animating = False
+            return False
+
+        GLib.timeout_add(_ZOOM_OUT_MS + 100, done)
+
     def _on_zoom_in(self, _button: Gtk.Button) -> None:
         """Zoom in on the map."""
         logger.debug("UI: map zoom in")
@@ -387,7 +502,11 @@ class MapView(Gtk.Box):
 
     def _on_viewport_moved(self, viewport: object, pspec: object) -> None:
         """Disable follow mode when user pans the map."""
-        if not self._programmatic_move and self._following:
+        if (
+            not self._programmatic_move
+            and not getattr(self, "_zoom_animating", False)
+            and self._following
+        ):
             self._set_following(False)
 
     def _set_following(self, active: bool) -> None:
@@ -489,6 +608,7 @@ class MapView(Gtk.Box):
                     self._peer_markers[peer.peer_id] = marker
                     self._marker_layer.add_marker(marker)
                 marker.set_location(peer.latitude, peer.longitude)
+                self._set_marker_elevation(marker, peer)
             else:
                 # Create new marker
                 marker = self._create_peer_marker(peer)
@@ -500,6 +620,8 @@ class MapView(Gtk.Box):
             if peer_id not in seen_ids:
                 marker = self._peer_markers.pop(peer_id)
                 self._marker_layer.remove_marker(marker)
+
+        self._apply_marker_filter()
 
         # Update device marker
         self._update_device_marker()
@@ -539,10 +661,21 @@ class MapView(Gtk.Box):
             for visible in (True, False):
                 tag = Gtk.Label(label=peer.public_key[:4].upper())
                 tag.add_css_class("map-marker-hash")
-                tag.set_halign(Gtk.Align.CENTER)
                 if visible:
-                    marker_box.append(tag)
+                    # Ground elevation (green) to the left of the hash, once known.
+                    row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=3)
+                    row.set_halign(Gtk.Align.CENTER)
+                    elev = Gtk.Label()
+                    elev.add_css_class("map-marker-elev")
+                    elev.set_tooltip_text("Ground elevation (SRTM)")
+                    elev.set_visible(False)
+                    row.append(elev)
+                    row.append(tag)
+                    marker_box.append(row)
+                    setattr(marker, "_elev_label", elev)
+                    self._set_marker_elevation(marker, peer)
                 else:  # invisible twin on top keeps the dot on the coordinate
+                    tag.set_halign(Gtk.Align.CENTER)
                     tag.set_opacity(0.0)
                     tag.set_can_target(False)
                     marker_box.prepend(tag)
@@ -561,6 +694,34 @@ class MapView(Gtk.Box):
         marker_box.add_controller(click)
 
         return marker
+
+    def _set_marker_elevation(self, marker: Shumate.Marker, peer: Peer) -> None:
+        """Fill the marker's green elevation square, if the tile is on disk yet."""
+        label = getattr(marker, "_elev_label", None)
+        if label is None or getattr(marker, "_elev_done", None) == (
+            peer.latitude,
+            peer.longitude,
+        ):
+            return
+        metres = self._elevation.elevation(peer.latitude, peer.longitude)
+        if metres is None:
+            label.set_visible(False)  # tile still downloading, or no data here
+            return
+        label.set_text(f"{metres:.0f}m")
+        label.set_visible(True)
+        setattr(marker, "_elev_done", (peer.latitude, peer.longitude))
+
+    def _on_elevation_tile(self, _name: str) -> None:
+        """A tile finished downloading (worker thread): fill in the squares."""
+
+        def fill() -> bool:
+            for peer in self._service.list_peers():
+                marker = self._peer_markers.get(peer.peer_id)
+                if marker is not None:
+                    self._set_marker_elevation(marker, peer)
+            return False
+
+        GLib.idle_add(fill)
 
     def _draw_marker_dot(
         self,
@@ -707,9 +868,9 @@ class MapView(Gtk.Box):
         self._details_title.set_xalign(0.0)
         if peer.is_repeater and peer.public_key:  # ID hash next to the name, as on the marker
             self._details_title.set_markup(
-                f"{GLib.markup_escape_text(peer.display_name)}  "
-                f"<span font_family='DejaVu Sans Mono' background='#a07828' foreground='#ffe880' size='smaller'>"
-                f" {peer.public_key[:4].upper()} </span>"
+                # "Name · 59B9", as the header shows this node, with the hash in bold
+                f"{GLib.markup_escape_text(peer.display_name)} \u00b7 "
+                f"<b>{peer.public_key[:4].upper()}</b>"
             )
 
         # Type badge
@@ -922,11 +1083,39 @@ class MapView(Gtk.Box):
             cr.arc(x, y, 2.6, 0, 2 * math.pi)
             cr.fill()
 
+    _FAV_MODES = ("off", "links", "favs")
+
     def _on_fav_links_clicked(self, btn: Gtk.Button) -> None:
-        if getattr(self, "_fav_layers", None):
+        nxt = self._FAV_MODES[(self._FAV_MODES.index(self._fav_mode) + 1) % 3]
+        self._set_fav_mode(nxt)
+
+    def _set_fav_mode(self, mode: str) -> None:
+        """off: no links, every repeater. links (green): links plus every repeater.
+        favs (purple): links, and only favourite repeaters on the map."""
+        logger.debug("UI: favourite links mode %s -> %s", self._fav_mode, mode)
+        self._fav_mode = mode
+        if mode == "off":
             self._clear_fav_links()
-            return
-        self._draw_fav_links()
+        elif mode == "links" or not getattr(self, "_fav_layers", None):
+            self._draw_fav_links()  # also toasts the link count
+        # favs normally keeps the links drawn by the links step
+        self._fav_links_btn.remove_css_class("map-control-active")
+        self._fav_links_btn.remove_css_class("map-control-favs")
+        if mode == "links":
+            self._fav_links_btn.add_css_class("map-control-active")
+        elif mode == "favs":
+            self._fav_links_btn.add_css_class("map-control-favs")
+            self._show_toast("Favourite repeaters only")
+        self._apply_marker_filter()
+
+    def _apply_marker_filter(self) -> None:
+        """In favourites-only mode show only favourite repeaters: other repeaters,
+        companions and room servers are hidden (your own marker stays)."""
+        favs_only = getattr(self, "_fav_mode", "off") == "favs"
+        for peer in self._service.list_peers():
+            marker = self._peer_markers.get(peer.peer_id)
+            if marker is not None:
+                marker.set_visible(not favs_only or (peer.is_repeater and peer.is_favorite))
 
     def _clear_fav_links(self) -> None:
         map_widget = self._map.get_map()
@@ -936,10 +1125,6 @@ class MapView(Gtk.Box):
             except Exception:  # noqa: BLE001
                 pass
         self._fav_layers = []
-        self._fav_links_btn.remove_css_class("map-control-active")
-        self._fav_links_btn.set_tooltip_text(
-            "Show links between favourite repeaters that hear each other"
-        )
 
     def _draw_fav_links(self) -> None:
         import math
@@ -982,7 +1167,6 @@ class MapView(Gtk.Box):
         map_widget = self._map.get_map()
         bubbles = Shumate.MarkerLayer.new(self._viewport)
         layers = []
-        points: list[tuple[float, float]] = []
         edge = Gdk.RGBA()
         edge.red = edge.green = edge.blue = 0.0
         edge.alpha = 0.8
@@ -1006,7 +1190,6 @@ class MapView(Gtk.Box):
             except Exception:  # noqa: BLE001
                 map_widget.add_layer(layer)
             layers.append(layer)
-            points += [(a.latitude, a.longitude), (b.latitude, b.longitude)]
 
             (xa, ya), (xb, yb) = merc(a.latitude, a.longitude), merc(b.latitude, b.longitude)
             sector = int(round(math.degrees(math.atan2(yb - ya, xb - xa)) / 45.0)) % 8
@@ -1040,8 +1223,7 @@ class MapView(Gtk.Box):
             except Exception:  # noqa: BLE001
                 map_widget.add_layer(bubbles)
             layers.append(bubbles)
-            self._fit_route(points, only_if_hidden=True)
-            self._fav_links_btn.add_css_class("map-control-active")
+            # No auto-fit: turning the links on leaves the zoom and view alone.
         self._fav_layers = layers
 
         n = len(mesh.links)
@@ -1066,10 +1248,7 @@ class MapView(Gtk.Box):
                 "No neighbour list yet (log in to poll): "
                 + ", ".join(p.display_name for p in mesh.no_table)
             )
-        self._show_toast(" \u00b7 ".join(short) + " (details: hover the button)")
-        self._fav_links_btn.set_tooltip_text(
-            "Hide links between favourite repeaters\n\n" + "\n".join(detail)
-        )
+        self._show_toast(" \u00b7 ".join(short))
         logger.info("favourite links: %s", "; ".join(detail))
 
     def _route_nodes(self, peer: Peer) -> list[tuple[str, float | None, float | None]]:
@@ -1525,6 +1704,14 @@ class MapView(Gtk.Box):
         threading.Thread(target=work, daemon=True).start()
 
     def focus_peer(self, peer_id: str) -> None:
+        """Navigation entry (a jump here from another screen): centre on a peer.
+
+        Turns the favourite-link view off, so every repeater shows again, unless
+        the peer is a favourite repeater: then the link view stays as it was.
+        """
+        self._focus_peer(peer_id, reset_links=True)
+
+    def _focus_peer(self, peer_id: str, *, reset_links: bool) -> None:
         """Center the map on a peer, zoom in, and open its details panel."""
         if not SHUMATE_AVAILABLE:
             return
@@ -1533,6 +1720,8 @@ class MapView(Gtk.Box):
             self._show_toast("No location for that node yet")
             return
         logger.debug("UI: map focus peer=%s", peer.display_name)
+        if reset_links and self._fav_mode != "off" and not (peer.is_repeater and peer.is_favorite):
+            self._set_fav_mode("off")
         self._refresh_markers()
         self._selected_peer = peer
         self._show_peer_details(peer)
@@ -1584,8 +1773,8 @@ class MapView(Gtk.Box):
         def go() -> bool:
             if peer is None:
                 self.center_on_device()
-            else:
-                self.focus_peer(peer.peer_id)
+            else:  # already on the Map: leave the link view as it is
+                self._focus_peer(peer.peer_id, reset_links=False)
             return False
 
         GLib.idle_add(go)

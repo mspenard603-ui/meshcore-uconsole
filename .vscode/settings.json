@@ -3,5 +3,9 @@
     "editor.defaultFormatter": "charliermarsh.ruff",
     "editor.formatOnSave": true,
     "editor.codeActionsOnSave": { "source.fixAll.ruff": "explicit" }
-  }
+  },
+  // Status bar task buttons (actboy168.tasks): only tasks that opt in with
+  // options.statusbar.hide=false get a button; the rest stay in the dropdown.
+  "tasks.statusbar.default.hide": true,
+  "tasks.statusbar.select.label": "$(list-unordered) Tasks"
 }

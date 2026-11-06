@@ -338,6 +338,33 @@ def test_message_pruning(conn):
     assert len(store) == MAX_MESSAGES
 
 
+def test_pruning_is_per_channel(conn):
+    """A busy channel never prunes a quiet one (room posts can't be re-fetched)."""
+    store = MessageStore(conn)
+    from meshcore_console.meshcore.state_store import MAX_MESSAGES
+
+    store.append(
+        _make_message(
+            msg_id="room-post",
+            channel="room:abcd",
+            created_at=datetime(2024, 1, 1, tzinfo=UTC),  # older than all of public
+        )
+    )
+    for i in range(MAX_MESSAGES + 10):
+        store.append(
+            _make_message(
+                msg_id=f"p-{i}",
+                channel="public",
+                created_at=datetime(2025, 1, 1, 0, i // 60, i % 60, tzinfo=UTC),
+            )
+        )
+
+    assert [m.message_id for m in store.get_for_channel("room:abcd")] == ["room-post"]
+    assert len(store.get_for_channel("public", limit=0)) == MAX_MESSAGES
+    # the oldest public messages went, not the newest
+    assert store.get_for_channel("public", limit=1)[0].message_id == f"p-{MAX_MESSAGES + 9}"
+
+
 # ---------------------------------------------------------------------------
 # PeerStore tests
 # ---------------------------------------------------------------------------

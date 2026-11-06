@@ -18,6 +18,7 @@ from meshcore_console.meshcore.logging_setup import (
 )
 from meshcore_console.meshcore.region import normalize_region_scope
 from meshcore_console.meshcore.settings import (
+    REPEATER_EXPIRY,
     MeshcoreSettings,
     apply_hardware_preset,
     apply_preset,
@@ -144,6 +145,7 @@ class SettingsView(Gtk.Box):
         right_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
         right_col.append(self._build_hardware_panel())
         right_col.append(self._build_logging_panel())
+        right_col.append(self._build_repeaters_panel())
         columns.append(right_col)
 
         # Actions bar at bottom
@@ -494,6 +496,32 @@ class SettingsView(Gtk.Box):
         panel.connect("unmap", self._on_logging_panel_unmap)
         return panel
 
+    def _build_repeaters_panel(self) -> Gtk.Box:
+        panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        panel.add_css_class("panel-card")
+        panel.set_valign(Gtk.Align.START)
+
+        title = Gtk.Label(label="Repeaters")
+        title.add_css_class("panel-title")
+        title.set_halign(Gtk.Align.START)
+        panel.append(title)
+
+        grid = Gtk.Grid()
+        grid.set_row_spacing(8)
+        grid.set_column_spacing(8)
+        grid.attach(self._grid_label("Remove After"), 0, 0, 1, 1)
+        self._repeater_expiry_combo = Gtk.ComboBoxText.new()
+        for key, (label, _seconds) in REPEATER_EXPIRY.items():
+            self._repeater_expiry_combo.append(key, label)
+        self._repeater_expiry_combo.set_active_id("never")
+        self._repeater_expiry_combo.set_tooltip_text(
+            "Repeaters whose last advert is older than this are removed from the "
+            "list. Favourites (\u2605) are always kept."
+        )
+        grid.attach(self._repeater_expiry_combo, 1, 0, 1, 1)
+        panel.append(grid)
+        return panel
+
     def _on_logging_panel_map(self, _panel: Gtk.Widget) -> None:
         self._refresh_rf_noise()
         if not self._rf_noise_timer_id:
@@ -811,6 +839,11 @@ class SettingsView(Gtk.Box):
         self._log_level_combo.set_active_id(settings.log_level)
         self._set_switch("show_radio_error_toasts", settings.show_radio_error_toasts)
 
+        # Repeaters
+        self._repeater_expiry_combo.set_active_id(
+            settings.repeater_expiry if settings.repeater_expiry in REPEATER_EXPIRY else "never"
+        )
+
     def _collect_settings(self, allow_partial: bool = False) -> MeshcoreSettings:
         current = self._service.get_settings()
         out = current.clone()
@@ -872,6 +905,9 @@ class SettingsView(Gtk.Box):
         # Logging
         out.log_level = self._log_level_combo.get_active_id() or "INFO"
         out.show_radio_error_toasts = self._switches["show_radio_error_toasts"].get_active()
+
+        # Repeaters
+        out.repeater_expiry = self._repeater_expiry_combo.get_active_id() or "never"
 
         return out
 

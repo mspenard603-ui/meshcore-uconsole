@@ -209,8 +209,8 @@ async def send_login(
     password: str,
     timeout: float = 10.0,
 ) -> dict:
-    """Serialised: the login handler has a single callback, so a room login and a
-    repeater login in flight together would steal each other's reply."""
+    """Serialised: the handler keeps one pending login per peer and one stored
+    password per 1-byte dest hash, so overlapping logins could clobber each other."""
     loop = asyncio.get_running_loop()
     lock = _LOGIN_LOCKS.get(id(loop))
     if lock is None:
@@ -245,7 +245,9 @@ async def _send_login_unlocked(
         login_result["data"] = data
         login_event.set()
 
-    login_handler.set_login_callback(_on_login)
+    # Keyed by the target's full public key: the 1-byte dest hash collides.
+    pubkey = bytes.fromhex(contact.public_key)
+    login_handler.register_login_callback(pubkey, _on_login)
     try:
         pkt = PacketBuilder.create_login_packet(
             contact=contact,
@@ -257,7 +259,7 @@ async def _send_login_unlocked(
     except asyncio.TimeoutError:
         return {"success": False, "reason": "Login response timeout"}
     finally:
-        login_handler.set_login_callback(None)
+        login_handler.remove_login_callback(pubkey, _on_login)
         login_handler.clear_login_password(dest_hash)
 
     data = login_result["data"]
@@ -311,14 +313,9 @@ async def send_repeater_command(
         response_data["text"] = message_text
         response_event.set()
 
-    # [callback-api patch] newer openhop_core delivers CLI replies to a waiter
-    # keyed by the target's full public key; older builds had one global callback.
-    _target = bytes.fromhex(contact.public_key)
-    _keyed = hasattr(text_handler, "register_command_response")
-    if _keyed:
-        text_handler.register_command_response(_target, _on_response)
-    else:
-        text_handler.set_command_response_callback(_on_response)
+    # CLI replies go to a waiter keyed by the target's full public key.
+    pubkey = bytes.fromhex(contact.public_key)
+    text_handler.register_command_response(pubkey, _on_response)
     try:
         pkt, _crc = PacketBuilder.create_text_message(
             contact=contact,
@@ -344,10 +341,7 @@ async def send_repeater_command(
             "reason": "Command response timeout",
         }
     finally:
-        if _keyed:  # [callback-api patch]
-            text_handler.unregister_command_response(_target, _on_response)
-        else:
-            text_handler.set_command_response_callback(None)
+        text_handler.unregister_command_response(pubkey, _on_response)
 
 
 async def send_advert(

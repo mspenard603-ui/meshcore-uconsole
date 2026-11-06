@@ -23,34 +23,13 @@ import weakref
 import gi
 
 gi.require_version("Gtk", "4.0")
-from gi.repository import GLib, Gtk, Pango  # noqa: E402
+from gi.repository import GLib, Gtk  # noqa: E402
+
+from meshcore_console.core.time import to_local  # noqa: E402
+from meshcore_console.ui_gtk.widgets.day_separator import DaySeparator  # noqa: E402
+from meshcore_console.ui_gtk.widgets.message_bubble import MessageBubble  # noqa: E402
 
 MAX_POST_LEN = 151  # firmware MAX_POST_TEXT_LEN (160 - 9)
-
-_CSS = b"""
-.room-post-author { font-weight: 700; }
-.room-post-own { color: #4ac8ff; }
-.room-post-time { opacity: 0.6; font-size: 0.85em; }
-.room-posts { padding: 6px; }
-"""
-_css_done = False
-
-
-def _ensure_css() -> None:
-    global _css_done
-    if _css_done:
-        return
-    from gi.repository import Gdk
-
-    display = Gdk.Display.get_default()
-    if display is None:
-        return
-    provider = Gtk.CssProvider()
-    provider.load_from_data(_CSS)
-    Gtk.StyleContext.add_provider_for_display(
-        display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
-    )
-    _css_done = True
 
 
 def _muted(text: str = "") -> Gtk.Label:
@@ -67,7 +46,6 @@ class RoomPanel(Gtk.Box):
 
     def __init__(self, service, room) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        _ensure_css()
         self.room_name = room.display_name
         self._service = service
         self._shown = -1  # number of posts rendered
@@ -101,14 +79,17 @@ class RoomPanel(Gtk.Box):
         self.status = _muted()
         self.append(self.status)
 
-        # --- posts
+        # --- posts: chat bubbles and day separators, as in Channels
         self.scroll = Gtk.ScrolledWindow()
         self.scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        self.scroll.set_min_content_height(300)
+        self.scroll.set_min_content_height(360)
         self.scroll.set_vexpand(True)
-        self.scroll.add_css_class("cli-console")
-        self.posts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        self.posts.add_css_class("room-posts")
+        self.scroll.add_css_class("panel-card")
+        self.posts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self.posts.set_margin_start(12)
+        self.posts.set_margin_end(12)
+        self.posts.set_margin_top(8)
+        self.posts.set_margin_bottom(8)
         self.scroll.set_child(self.posts)
         self.append(self.scroll)
 
@@ -170,8 +151,14 @@ class RoomPanel(Gtk.Box):
             child = nxt
         if not posts:
             self.posts.append(_muted("No posts yet."))
+        today = GLib.DateTime.new_now_local().format("%Y-%m-%d")
+        prev_date: str | None = None
         for m in sorted(posts, key=lambda m: m.created_at):
-            self.posts.append(_post_row(m))
+            day = to_local(m.created_at).strftime("%Y-%m-%d")
+            if day != prev_date and not (prev_date is None and day == today):
+                self.posts.append(DaySeparator(day))
+            prev_date = day
+            self.posts.append(MessageBubble(m, self._service, _on_post_clicked))
         self._shown = len(posts)
         if hasattr(self._service, "mark_room_read"):
             self._service.mark_room_read(self.room_name)
@@ -182,29 +169,18 @@ class RoomPanel(Gtk.Box):
         adj = self.scroll.get_vadjustment()
         return adj.get_value() + adj.get_page_size() >= adj.get_upper() - 24
 
+    def _on_message_reply_clicked(self, _btn: Gtk.Button, message) -> None:
+        """The bubble's reply arrow: start the draft with @[author], as in Channels."""
+        text = self.entry.get_text()
+        mention = f"@[{message.sender_id}] "
+        if not text.startswith(mention):
+            self.entry.set_text(mention + text)
+        self.entry.grab_focus()
+        self.entry.set_position(-1)
 
-def _post_row(m) -> Gtk.Widget:
-    from meshcore_console.core.time import to_local
 
-    row = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
-    head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-    author = Gtk.Label(label="You" if m.is_outgoing else m.sender_id)
-    author.add_css_class("room-post-author")
-    if m.is_outgoing:
-        author.add_css_class("room-post-own")
-    author.set_xalign(0.0)
-    head.append(author)
-    when = Gtk.Label(label=to_local(m.created_at).strftime("%b %-d %H:%M"))
-    when.add_css_class("room-post-time")
-    head.append(when)
-    row.append(head)
-    body = Gtk.Label(label=m.body)
-    body.set_wrap(True)
-    body.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
-    body.set_xalign(0.0)
-    body.set_selectable(True)
-    row.append(body)
-    return row
+def _on_post_clicked(_button: Gtk.Button, _message) -> None:
+    """Room posts carry no route or signal details to show; nothing to open."""
 
 
 def _scroll_to_end(ref) -> bool:
