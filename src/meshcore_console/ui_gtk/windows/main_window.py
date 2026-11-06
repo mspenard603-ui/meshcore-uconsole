@@ -860,6 +860,11 @@ class MainWindow(Adw.ApplicationWindow):
         if not (state & Gdk.ModifierType.CONTROL_MASK):
             return False
 
+        if keyval in (Gdk.KEY_f, Gdk.KEY_F):  # [peer-search patch] Ctrl+F: the view's search
+            view = self._stack.get_visible_child()
+            search_fn = getattr(view, "start_search", None)
+            return bool(search_fn is not None and search_fn())
+
         mapping = {
             Gdk.KEY_1: "analyzer",  # [rooms patch] same order as the tabs
             Gdk.KEY_2: "contacts",

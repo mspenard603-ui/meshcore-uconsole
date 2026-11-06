@@ -9,7 +9,7 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 
-from gi.repository import Adw, GLib, Gtk, Pango
+from gi.repository import Adw, GLib, GObject, Gtk, Pango
 
 from meshcore_console.ui_gtk.compat import build_alert_dialog, present_dialog
 
@@ -123,6 +123,10 @@ class PeersView(Gtk.Box):
         self._peer_telemetry: dict[str, dict] = {}
         self._sort_modes = _load_sort_modes()  # [peer-sort patch]
         self._distances: dict[str, float] = {}
+        # [peer-search patch] per list (keyed by is-repeaters): query, bar, entry, toggle
+        self._search_query: dict[bool, str] = {False: "", True: ""}
+        self._search_bars: dict[bool, tuple[Gtk.SearchBar, Gtk.SearchEntry]] = {}
+        self._search_toggles: dict[bool, Gtk.ToggleButton] = {}
 
         # Column 1: Contacts
         contacts_column = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
@@ -138,6 +142,7 @@ class PeersView(Gtk.Box):
                 repeaters=False,
             )
         )
+        contacts_column.append(self._search_bar(repeaters=False))  # [peer-search patch]
 
         contacts_scroll = Gtk.ScrolledWindow.new()
         contacts_scroll.set_vexpand(True)
@@ -147,6 +152,8 @@ class PeersView(Gtk.Box):
         self._contacts_list.add_css_class("peer-list")
         self._contacts_list.set_selection_mode(Gtk.SelectionMode.SINGLE)
         self._contacts_list.connect("row-selected", self._on_peer_selected)
+        self._contacts_list.set_filter_func(self._search_filter, False)  # [peer-search patch]
+        self._contacts_list.set_placeholder(EmptyState("No matches"))
         contacts_scroll.set_child(self._contacts_list)
         contacts_column.append(contacts_scroll)
 
@@ -159,6 +166,7 @@ class PeersView(Gtk.Box):
 
         # [clear-peers patch] header with Clear button
         network_column.append(self._list_header("Repeaters", repeaters=True))
+        network_column.append(self._search_bar(repeaters=True))  # [peer-search patch]
 
         network_scroll = Gtk.ScrolledWindow.new()
         network_scroll.set_vexpand(True)
@@ -168,6 +176,8 @@ class PeersView(Gtk.Box):
         self._network_list.add_css_class("peer-list")
         self._network_list.set_selection_mode(Gtk.SelectionMode.SINGLE)
         self._network_list.connect("row-selected", self._on_peer_selected)
+        self._network_list.set_filter_func(self._search_filter, True)  # [peer-search patch]
+        self._network_list.set_placeholder(EmptyState("No matches"))
         network_scroll.set_child(self._network_list)
         network_column.append(network_scroll)
 
@@ -1095,6 +1105,14 @@ class PeersView(Gtk.Box):
         label.set_halign(Gtk.Align.START)
         label.set_hexpand(True)
         box.append(label)
+        search = Gtk.ToggleButton()  # [peer-search patch]
+        search.set_icon_name("system-search-symbolic")
+        search.add_css_class("flat")
+        search.set_valign(Gtk.Align.CENTER)
+        search.set_tooltip_text(f"Search {title.lower()} (Ctrl+F)")
+        search.update_property([Gtk.AccessibleProperty.LABEL], [f"Search {title.lower()}"])
+        self._search_toggles[repeaters] = search
+        box.append(search)
         box.append(self._sort_dropdown(repeaters))  # [peer-sort patch]
         button = Gtk.Button(label="Clear")
         button.add_css_class("flat")
@@ -1103,6 +1121,92 @@ class PeersView(Gtk.Box):
         button.connect("clicked", self._on_clear_clicked, repeaters)
         box.append(button)
         return box
+
+    # --- [peer-search patch] -------------------------------------------------
+    def _search_bar(self, *, repeaters: bool) -> Gtk.SearchBar:
+        """Search box under a list header, shown by its magnifying glass or Ctrl+F."""
+        entry = Gtk.SearchEntry()
+        entry.set_placeholder_text("Name or hash")
+        entry.set_hexpand(True)
+        entry.connect("search-changed", self._on_search_changed, repeaters)
+        entry.connect("activate", self._on_search_activate, repeaters)
+        bar = Gtk.SearchBar()
+        bar.set_child(entry)
+        bar.connect_entry(entry)  # Esc in the box closes the bar
+        bar.set_show_close_button(False)
+        toggle = self._search_toggles[repeaters]
+        bar.bind_property(
+            "search-mode-enabled",
+            toggle,
+            "active",
+            GObject.BindingFlags.BIDIRECTIONAL | GObject.BindingFlags.SYNC_CREATE,
+        )
+        bar.connect("notify::search-mode-enabled", self._on_search_mode, repeaters)
+        self._search_bars[repeaters] = (bar, entry)
+        return bar
+
+    def start_search(self) -> bool:
+        """Ctrl+F: open (or refocus) the search box of this tab's list."""
+        repeaters = self._kind == "repeaters"
+        if repeaters not in self._search_bars:
+            return False
+        bar, entry = self._search_bars[repeaters]
+        bar.set_search_mode(True)
+        entry.grab_focus()
+        entry.select_region(0, -1)
+        return True
+
+    def _list_for(self, repeaters: bool) -> Gtk.ListBox:
+        return self._network_list if repeaters else self._contacts_list
+
+    def _on_search_mode(self, bar: Gtk.SearchBar, _pspec, repeaters: bool) -> None:
+        _bar, entry = self._search_bars[repeaters]
+        if bar.get_search_mode():
+            GLib.idle_add(lambda: entry.grab_focus() and False)
+            return
+        entry.set_text("")  # closing the box shows the whole list again
+        self._set_search(repeaters, "")
+        self._list_for(repeaters).grab_focus()
+
+    def _on_search_changed(self, entry: Gtk.SearchEntry, repeaters: bool) -> None:
+        self._set_search(repeaters, entry.get_text())
+
+    def _set_search(self, repeaters: bool, text: str) -> None:
+        query = text.strip().lower()
+        if query == self._search_query[repeaters]:
+            return
+        self._search_query[repeaters] = query
+        self._list_for(repeaters).invalidate_filter()
+
+    @staticmethod
+    def peer_matches(peer: Peer, query: str) -> bool:
+        """Case-insensitive match on the name, or a prefix of the public key (hash)."""
+        if not query:
+            return True
+        if query in (peer.display_name or "").lower():
+            return True
+        key = (peer.public_key or "").lower()
+        return bool(key) and key.startswith(query)
+
+    def _search_filter(self, row: Gtk.ListBoxRow, repeaters: bool) -> bool:
+        query = self._search_query[repeaters]
+        peer = getattr(row, "peer", None)
+        if peer is None:  # the "No contacts yet" row: hide it while searching
+            return not query
+        return self.peer_matches(peer, query)
+
+    def _on_search_activate(self, _entry: Gtk.SearchEntry, repeaters: bool) -> None:
+        """Enter: select the first match, as Ctrl+F jumps to the first hit."""
+        listbox = self._list_for(repeaters)
+        query = self._search_query[repeaters]
+        index = 0
+        while (row := listbox.get_row_at_index(index)) is not None:
+            peer = getattr(row, "peer", None)
+            if peer is not None and self.peer_matches(peer, query):
+                listbox.select_row(row)
+                row.grab_focus()
+                return
+            index += 1
 
     # --- [peer-sort patch] ---------------------------------------------------
     def _sort_dropdown(self, repeaters: bool) -> Gtk.DropDown:

@@ -84,6 +84,57 @@ def _save_map_view(zoom: float, lat: float, lon: float) -> None:
         logger.warning("Could not save map view: %s", e)
 
 
+# --- [map-layers patch] show/hide each node type on the map ---------------------
+MAP_LAYERS = (
+    # kind, tooltip noun, marker colour (as _draw_marker_dot)
+    ("repeater", "repeaters", (0.937, 0.725, 0.247)),  # #efb93f mc_warn
+    ("companion", "companions", (0.906, 0.933, 0.973)),  # #e7eef8 mc_text
+    ("room", "room servers", (0.663, 0.545, 1.0)),  # #a98bff violet
+)
+
+
+def marker_kind(peer: Peer) -> str:
+    """Which map layer a peer's marker belongs to."""
+    if peer.is_repeater:
+        return "repeater"
+    if getattr(peer, "node_type", None) == 3:
+        return "room"
+    return "companion"
+
+
+def _layers_file():
+    from meshcore_console.meshcore.paths import config_dir
+
+    return config_dir() / "map_layers.json"
+
+
+def load_map_layers() -> dict[str, bool]:
+    """Layer on/off saved by the last session; every layer on by default."""
+    import json
+
+    shown = {kind: True for kind, _n, _c in MAP_LAYERS}
+    try:
+        data = json.loads(_layers_file().read_text())
+    except (OSError, ValueError):
+        return shown
+    if isinstance(data, dict):
+        for kind in shown:
+            if isinstance(data.get(kind), bool):
+                shown[kind] = data[kind]
+    return shown
+
+
+def _save_map_layers(shown: dict[str, bool]) -> None:
+    import json
+
+    try:
+        path = _layers_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(shown))
+    except OSError as e:
+        logger.warning("Could not save map layers: %s", e)
+
+
 _DOUBLE_CLICK_ZOOM_MS = 250  # double-click zoom in/out animation
 
 
@@ -382,6 +433,25 @@ class MapView(Gtk.Box):
             move_btn.set_tooltip_text("Simulate GPS movement")
             move_btn.connect("clicked", self._on_simulate_movement)
             center_box.append(move_btn)
+
+        # [map-layers patch] one button per node type: show / hide its markers
+        self._layers_shown = load_map_layers()
+        self._layer_btns: dict[str, Gtk.Button] = {}
+        layers_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        layers_box.set_margin_start(8)
+        for kind, noun, _rgb in MAP_LAYERS:
+            btn = Gtk.Button()
+            icon = Gtk.DrawingArea()
+            icon.set_size_request(18, 18)
+            icon.set_draw_func(self._draw_layer_icon, kind)
+            btn.set_child(icon)
+            btn.add_css_class("map-control-button")
+            btn.update_property([Gtk.AccessibleProperty.LABEL], [f"Show {noun}"])
+            btn.connect("clicked", self._on_layer_clicked, kind)
+            self._layer_btns[kind] = btn
+            layers_box.append(btn)
+            self._style_layer_btn(kind)
+        center_box.append(layers_box)
 
         overlay.add_overlay(center_box)
 
@@ -1107,14 +1177,65 @@ class MapView(Gtk.Box):
         self._apply_marker_filter()
         self._queue_bubble_layout()  # hidden names free up room, shown ones take it
 
+    # --- [map-layers patch] -----------------------------------------------------
+    def _draw_layer_icon(self, area: Gtk.DrawingArea, cr, width: int, height: int, kind) -> None:
+        """The layer's marker dot: filled when shown, hollow and struck through when hidden."""
+        import math
+
+        rgb = next(c for k, _n, c in MAP_LAYERS if k == kind)
+        shown = self._layers_shown.get(kind, True)
+        cx, cy, r = width / 2, height / 2, 6.5
+        cr.set_line_width(2)
+        if shown:
+            cr.set_source_rgba(*rgb, 1.0)
+            cr.arc(cx, cy, r, 0, 2 * math.pi)
+            cr.fill()
+            if kind == "room":  # white centre, as on the map
+                cr.set_source_rgba(1.0, 1.0, 1.0, 1.0)
+                cr.arc(cx, cy, 2.2, 0, 2 * math.pi)
+                cr.fill()
+            return
+        cr.set_source_rgba(*rgb, 0.55)
+        cr.arc(cx, cy, r, 0, 2 * math.pi)
+        cr.stroke()
+        color = area.get_color()
+        cr.set_source_rgba(color.red, color.green, color.blue, 0.85)
+        cr.move_to(cx - r - 1.5, cy + r + 1.5)
+        cr.line_to(cx + r + 1.5, cy - r - 1.5)
+        cr.stroke()
+
+    def _style_layer_btn(self, kind: str) -> None:
+        btn = self._layer_btns[kind]
+        noun = next(n for k, n, _c in MAP_LAYERS if k == kind)
+        shown = self._layers_shown.get(kind, True)
+        btn.set_tooltip_text(f"{'Hide' if shown else 'Show'} {noun}")
+        btn.set_opacity(1.0 if shown else 0.7)
+        btn.get_child().queue_draw()
+
+    def _on_layer_clicked(self, _btn: Gtk.Button, kind: str) -> None:
+        self._set_layer_shown(kind, not self._layers_shown.get(kind, True))
+
+    def _set_layer_shown(self, kind: str, shown: bool) -> None:
+        logger.debug("UI: map layer %s %s", kind, "shown" if shown else "hidden")
+        self._layers_shown[kind] = shown
+        _save_map_layers(self._layers_shown)
+        self._style_layer_btn(kind)
+        self._apply_marker_filter()
+        self._queue_bubble_layout()  # hidden names free up room, shown ones take it
+
     def _apply_marker_filter(self) -> None:
-        """In favourites-only mode show only favourite repeaters: other repeaters,
+        """Hide markers of node types switched off by the layer buttons. [map-layers patch]
+        In favourites-only mode show only favourite repeaters: other repeaters,
         companions, room servers and your own "You" marker are hidden."""
         favs_only = getattr(self, "_fav_mode", "off") == "favs"
+        layers = getattr(self, "_layers_shown", {})
         for peer in self._service.list_peers():
             marker = self._peer_markers.get(peer.peer_id)
             if marker is not None:
-                marker.set_visible(not favs_only or (peer.is_repeater and peer.is_favorite))
+                marker.set_visible(
+                    layers.get(marker_kind(peer), True)
+                    and (not favs_only or (peer.is_repeater and peer.is_favorite))
+                )
         device = getattr(self, "_device_marker", None)
         if device is not None:
             device.set_visible(not favs_only)
@@ -1846,6 +1967,9 @@ class MapView(Gtk.Box):
         logger.debug("UI: map focus peer=%s", peer.display_name)
         if reset_links and self._fav_mode != "off" and not (peer.is_repeater and peer.is_favorite):
             self._set_fav_mode("off")
+        kind = marker_kind(peer)  # [map-layers patch] a jump to a hidden type shows that type
+        if not getattr(self, "_layers_shown", {}).get(kind, True):
+            self._set_layer_shown(kind, True)
         self._refresh_markers()
         self._selected_peer = peer
         self._show_peer_details(peer)

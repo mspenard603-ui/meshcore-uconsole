@@ -353,11 +353,22 @@ def _short(h) -> str:
     return "me" if h in (None, "me") else str(h)[:4].upper()
 
 
-def trace_links(traces: list[dict], max_points: int = 240, span: float = 0.0) -> list[dict]:
+def path_link_keys(path: list) -> list[tuple]:
+    """Link keys along *path* (outbound node list: "me", hops..., target). [trace-path patch]"""
+    return [(_hop_id(path[i]), _hop_id(path[i + 1])) for i in range(len(path) - 1)]
+
+
+def trace_links(
+    traces: list[dict], max_points: int = 240, span: float = 0.0, path: list | None = None
+) -> list[dict]:
     """Per-link series from logged traces, in the order of the most recent route.
 
     Returns [{"a": hop, "b": hop, "out": [(t, snr)], "ret": [(t, snr)]}] where
     *a* is the end nearer to this radio. Outbound = first half of the round trip.
+
+    With *path* (the current network path: "me", hops..., target), only the links
+    on that path are returned, in path order, each one even before it has data,
+    so the graph always matches the Network Path. [trace-path patch]
     """
     links: dict[tuple, dict] = {}
     order: list[tuple] = []
@@ -379,9 +390,16 @@ def trace_links(traces: list[dict], max_points: int = 240, span: float = 0.0) ->
             if key not in seen:
                 seen.append(key)
         order = seen + [k for k in order if k not in seen]
-    for k in links:
-        if k not in order:
-            order.append(k)
+    if path is not None and len(path) > 1:
+        order = []
+        for i, key in enumerate(path_link_keys(path)):
+            if key not in order:
+                order.append(key)
+                links.setdefault(key, {"a": path[i], "b": path[i + 1], "out": [], "ret": []})
+    else:
+        for k in links:
+            if k not in order:
+                order.append(k)
     out = [links[k] for k in order]
     if span > 0:
         bucket = span / max_points
@@ -1288,6 +1306,7 @@ class RepeaterGraphPage(Gtk.Box):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         self._service = service
         self._pubkey: str | None = None
+        self._shown_path: list | None = None  # [trace-path patch] path the Trace graph was drawn for
         self._range_s = 86400  # default 24 h
         self._hover_x: float | None = None
         self._data: dict | None = None
@@ -1363,6 +1382,22 @@ class RepeaterGraphPage(Gtk.Box):
         self._pubkey = pubkey.lower() if pubkey else None
         self.refresh()
 
+    def path_changed(self) -> None:  # [trace-path patch]
+        """The repeater's network path may have changed: redraw Trace if it did."""
+        if self._mode == "trace" and self._pubkey and self._current_path() != self._shown_path:
+            self.refresh()
+
+    def _current_path(self) -> list | None:  # [trace-path patch]
+        """Current network path to the repeater as "me", hops..., pubkey (None if unknown)."""
+        try:
+            peers = self._service.list_peers()
+        except Exception:  # noqa: BLE001
+            return None
+        for p in peers:
+            if (p.public_key or p.peer_id or "").lower() == self._pubkey:
+                return ["me", *(p.last_path or []), p.public_key or self._pubkey]
+        return None
+
     def refresh(self) -> None:
         self._data = self._load() if self._pubkey else None
         need = 0  # [trace-scroll patch] trace: grow with the number of links, then scroll
@@ -1430,11 +1465,12 @@ class RepeaterGraphPage(Gtk.Box):
         # typical spacing between traces -> gap that breaks the line
         spacing = (ok[-1]["t"] - ok[0]["t"]) / (len(ok) - 1) if len(ok) > 1 else self._range_s
         self._info.set_text(f"{len(traces)} traces · {len(fails)} failed")
+        path = self._shown_path = self._current_path()  # [trace-path patch]
         return {
             "mode": "trace",
             "t0": t0,
             "t1": t1,
-            "links": trace_links(traces, span=self._range_s),
+            "links": trace_links(traces, span=self._range_s, path=path),
             "fails": fails,
             "sf": sf,
             "limit": SNR_LIMIT_DB.get(sf, -7.5),

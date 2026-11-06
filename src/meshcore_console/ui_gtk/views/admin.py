@@ -1331,6 +1331,7 @@ class AdminView(Gtk.Box):
             "Direct (heard with no hops)" if hops == 0 else f"{hops} hop{'s' if hops != 1 else ''}"
         )
         self._admin_path_box.append(path)
+        self._graph_page.path_changed()  # [trace-path patch] Trace graph follows the path
 
     # --- [trace patch] --------------------------------------------------------
     # --- [trace-log patch] auto-trace -----------------------------------------
