@@ -13,7 +13,7 @@ from gi.repository import Gtk, Pango
 from meshcore_console.core.models import Message
 from meshcore_console.core.time import to_local
 from meshcore_console.ui_gtk.helpers import navigate
-from meshcore_console.ui_gtk.widgets.mention import parse_mentions
+from meshcore_console.ui_gtk.widgets.mention import mentions_name, parse_mentions
 from meshcore_console.ui_gtk.widgets.node_badge import STYLE_SELF, NodeBadge
 
 if TYPE_CHECKING:
@@ -37,6 +37,13 @@ def _reply_css() -> None:  # [channel-reply patch] small, quiet arrow; full stre
         Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
     )
     _REPLY_CSS["done"] = True
+
+
+def _self_name(service: MeshcoreService) -> str | None:  # [mention-glow patch]
+    try:
+        return service.get_status().node_id
+    except Exception:  # noqa: BLE001
+        return None
 
 
 # [leak-fix patch] self._method handlers on the bubble's own children made a
@@ -98,6 +105,9 @@ class MessageBubble(Gtk.Box):
             self.append(badge)
         else:
             bubble.add_css_class("message-incoming")
+            if mentions_name(message.body, _self_name(service)):  # [mention-glow patch]
+                bubble.add_css_class("message-mention")
+                bubble.set_tooltip_text("Mentions you")
             self.set_halign(Gtk.Align.START)
             self.append(badge)
             self.append(bubble)

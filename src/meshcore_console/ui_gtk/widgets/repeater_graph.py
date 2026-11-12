@@ -1306,7 +1306,9 @@ class RepeaterGraphPage(Gtk.Box):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         self._service = service
         self._pubkey: str | None = None
-        self._shown_path: list | None = None  # [trace-path patch] path the Trace graph was drawn for
+        self._shown_path: list | None = (
+            None  # [trace-path patch] path the Trace graph was drawn for
+        )
         self._range_s = 86400  # default 24 h
         self._hover_x: float | None = None
         self._data: dict | None = None

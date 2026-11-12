@@ -23,7 +23,7 @@ import weakref
 import gi
 
 gi.require_version("Gtk", "4.0")
-from gi.repository import GLib, Gtk  # noqa: E402
+from gi.repository import GLib, Gtk, Pango  # noqa: E402
 
 from meshcore_console.core.time import to_local  # noqa: E402
 from meshcore_console.ui_gtk.widgets.day_separator import DaySeparator  # noqa: E402
@@ -76,13 +76,22 @@ class RoomPanel(Gtk.Box):
         self.save_pw.set_active(bool(saved))
         opts.append(self.save_pw)
         self.append(opts)
+        # One line, always: a long login error must not push the compose row off
+        # screen. Ellipsized; the whole text is in the tooltip. max_width_chars(1)
+        # keeps the label's natural width from growing the window (it fills via hexpand).
         self.status = _muted()
+        self.status.set_wrap(False)
+        self.status.set_single_line_mode(True)
+        self.status.set_ellipsize(Pango.EllipsizeMode.END)
+        self.status.set_max_width_chars(1)
+        self.status.set_hexpand(True)
+        self.status.set_halign(Gtk.Align.FILL)
         self.append(self.status)
 
         # --- posts: chat bubbles and day separators, as in Channels
         self.scroll = Gtk.ScrolledWindow()
         self.scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        self.scroll.set_min_content_height(360)
+        self.scroll.set_min_content_height(120)
         self.scroll.set_vexpand(True)
         self.scroll.add_css_class("panel-card")
         self.posts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -100,6 +109,9 @@ class RoomPanel(Gtk.Box):
         self.entry.set_max_length(MAX_POST_LEN)
         self.entry.set_placeholder_text(f"Post to {self.room_name}…")
         self.entry.connect("activate", _on_send)
+        from meshcore_console.ui_gtk.widgets.auto_capitalize import attach_auto_capitalize
+
+        attach_auto_capitalize(self.entry)
         compose.append(self.entry)
         self.send_btn = Gtk.Button(label="Post")
         self.send_btn.connect("clicked", _on_send)
@@ -110,8 +122,17 @@ class RoomPanel(Gtk.Box):
         self.refresh_posts()
         ref = weakref.ref(self)
         GLib.timeout_add(2000, _tick, ref)
+        # The room's details follow this panel in the same scrolled page: fill
+        # exactly the visible height so the compose row is never below the screen.
+        self._fit = None  # (adjustment, handler id)
+        self.connect("map", _fit_to_viewport)
+        self.connect("unmap", _unfit)
 
     # --- display -------------------------------------------------------------
+    def set_status(self, text: str) -> None:
+        self.status.set_text(text)
+        self.status.set_tooltip_text(text or None)
+
     def refresh_status(self) -> None:
         state = (
             self._service.get_room_login_state(self.room_name)
@@ -120,12 +141,12 @@ class RoomPanel(Gtk.Box):
         )
         if state:
             when = time.strftime("%H:%M", time.localtime(state["time"]))
-            self.status.set_text(
+            self.set_status(
                 f"Logged in at {when} ({state['role']}). New posts arrive as the room pushes them."
             )
             self.login_btn.set_label("Log in again")
         else:
-            self.status.set_text(
+            self.set_status(
                 "Not logged in this session. Log in to receive the room's posts; "
                 "posts already received are shown below."
             )
@@ -183,6 +204,37 @@ def _on_post_clicked(_button: Gtk.Button, _message) -> None:
     """Room posts carry no route or signal details to show; nothing to open."""
 
 
+def _fit_to_viewport(panel: RoomPanel) -> None:
+    _unfit(panel)
+    outer = panel.get_ancestor(Gtk.ScrolledWindow)
+    if outer is None:
+        return
+    adj = outer.get_vadjustment()
+    ref = weakref.ref(panel)
+
+    def apply() -> bool:
+        p = ref()
+        if p is not None and p._fit is not None:
+            height = int(p._fit[0].get_page_size())
+            if height > 0 and p.get_size_request()[1] != height:
+                p.set_size_request(-1, height)
+        return False
+
+    def on_page_size(_a, _pspec=None) -> None:
+        # page-size changes during size allocation: resize after it, not inside it
+        GLib.idle_add(apply)
+
+    panel._fit = (adj, adj.connect("notify::page-size", on_page_size))
+    on_page_size(adj)
+
+
+def _unfit(panel: RoomPanel) -> None:
+    if panel._fit is not None:
+        adj, handler = panel._fit
+        adj.disconnect(handler)
+        panel._fit = None
+
+
 def _scroll_to_end(ref) -> bool:
     panel = ref()
     if panel is not None:
@@ -229,7 +281,7 @@ def _on_login(widget) -> None:
                     if "timeout" in reason.lower()
                     else ""
                 )
-                p.status.set_text(f"Login failed: {reason}{hint}.")
+                p.set_status(f"Login failed: {reason}{hint}.")
             return False
 
         GLib.idle_add(done)
@@ -264,7 +316,7 @@ def _on_send(widget) -> None:
                 p.refresh_posts()
                 GLib.idle_add(_scroll_to_end, ref)
             else:
-                p.status.set_text(f"Post failed: {result.get('reason', 'no reply')}.")
+                p.set_status(f"Post failed: {result.get('reason', 'no reply')}.")
             p.entry.grab_focus()
             return False
 
@@ -273,9 +325,13 @@ def _on_send(widget) -> None:
     threading.Thread(target=work, daemon=True).start()
 
 
-def auto_login_rooms(service) -> None:
+def auto_login_rooms(service, *, max_age: float | None = None) -> None:
     """Log in (one after another) to every room with a saved password that we
-    aren't logged in to this session. Runs in a worker thread."""
+    aren't logged in to, or whose login is older than ``max_age`` seconds.
+    Runs in a worker thread."""
+    if hasattr(service, "relogin_rooms"):
+        service.relogin_rooms(max_age=max_age)
+        return
     if not hasattr(service, "login_to_room"):
         return
     rooms = [p for p in service.list_peers() if getattr(p, "node_type", None) == 3]

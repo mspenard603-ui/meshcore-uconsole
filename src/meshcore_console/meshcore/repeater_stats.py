@@ -563,16 +563,23 @@ def _response_key(handler: Any, contact: Any, tag: int) -> tuple:
 
 
 def _forget_route(node: Any, contact_name: str) -> None:
-    """After a timeout over a multi-hop route, clear it so the next request floods."""
+    """A request got no reply: on the second in a row, clear the route so the next request
+    floods once and its reply teaches a route again (airtime_policy; zero-hop routes too:
+    a far repeater heard directly but too weakly gets one from its advert)."""
+    from meshcore_console.meshcore.airtime_policy import forget_route_after_misses
+
     contacts = getattr(node, "contacts", None)
     contact = contacts.get_by_name(contact_name) if contacts is not None else None
-    if (
-        contact is not None
-        and getattr(contact, "out_path_len", -1) > 0
-        and (contact.out_path_len & 0x3F)
-    ):
-        contact.out_path = []
-        contact.out_path_len = -1
+    if forget_route_after_misses(contact, contact_name):
+        logger.info(
+            "route to %s forgotten after repeated timeouts; next request floods", contact_name
+        )
+
+
+def _route_ok(contact_name: str) -> None:
+    from meshcore_console.meshcore.airtime_policy import ROUTE_MISSES
+
+    ROUTE_MISSES.ok(contact_name)
 
 
 async def request_status(*, node: Any, contact_name: str, timeout: float = 10.0) -> dict:
@@ -604,6 +611,7 @@ async def request_status(*, node: Any, contact_name: str, timeout: float = 10.0)
     finally:
         handler.clear_response_callback(*key)
 
+    _route_ok(contact_name)  # a reply came back over this route
     parsed = result.get("parsed") or {}
     if not result.get("success") or parsed.get("type") != "stats":
         return {"success": False, "reason": f"Unexpected reply: {result.get('text', '')[:60]}"}
@@ -790,6 +798,7 @@ async def request_neighbours(
                 _forget_route(node, contact_name)
                 return {"success": False, "reason": f"No response after {timeout:.0f}s"}
             break  # keep the pages we have
+        _route_ok(contact_name)
         try:
             total, entries = parse_neighbours(raw, prefix_len)
         except ValueError as exc:
@@ -857,6 +866,7 @@ async def request_owner_info(*, node: Any, contact_name: str, timeout: float = 1
     if raw is None:
         _forget_route(node, contact_name)
         return {"success": False, "reason": f"No response after {timeout:.0f}s"}
+    _route_ok(contact_name)
     info = parse_owner_info(raw)
     info.update(success=True, rtt_ms=round((time.monotonic() - t0) * 1000))
     return info

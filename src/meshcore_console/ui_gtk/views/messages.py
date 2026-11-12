@@ -44,6 +44,13 @@ class MessagesView(Gtk.Box):
         self._last_channel_count = 0
         self._last_message_date: str | None = None
         self._selected_message: Message | None = None
+        # Last trace per message id, so it is still there when the details panel
+        # is closed and opened again: {"hops", "result", "target"}.
+        self._message_traces: dict[str, dict] = {}
+        self._message_traces_running: set[str] = set()
+        # The details panel's current trace button + results box per message id
+        # (the panel is rebuilt on every open; a running trace reports to the newest).
+        self._trace_widgets: dict[str, tuple[Gtk.Button, Gtk.Box]] = {}
 
         # Main content area (channels + chat)
         split = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
@@ -182,6 +189,9 @@ class MessagesView(Gtk.Box):
         self._entry.set_placeholder_text("Type message and press Send")
         self._entry.set_hexpand(True)
         self._entry.connect("activate", self._on_send)
+        from meshcore_console.ui_gtk.widgets.auto_capitalize import attach_auto_capitalize
+
+        attach_auto_capitalize(self._entry)
         compose.append(self._entry)
 
         self._send_button = Gtk.Button.new_with_label("Send")
@@ -619,10 +629,16 @@ class MessagesView(Gtk.Box):
                 "Round-trip TRACE through the repeaters this message came through, "
                 "to the one nearest the sender and back: SNR for every link"
             )
-            trace.connect("clicked", self._on_message_trace_clicked, hops, results)
+            trace.connect("clicked", self._on_message_trace_clicked, hops, results, message)
             row.append(trace)
             box.append(notes)
             box.append(results)
+            self._trace_widgets[message.message_id] = (trace, results)
+            if message.message_id in self._message_traces_running:
+                trace.set_sensitive(False)
+                trace.set_label("Tracing\u2026")
+            elif message.message_id in self._message_traces:
+                self._show_message_trace(results, self._message_traces[message.message_id])
         else:
             if message.path_len == 0:
                 note("It came directly (no repeaters), so there is no route to trace.")
@@ -653,18 +669,21 @@ class MessagesView(Gtk.Box):
         self._service.set_favorite(peer_id, favorite)
         btn.set_label("\u2605 Unfavorite" if favorite else "\u2606 Favorite")
 
-    def _on_message_trace_clicked(self, btn: Gtk.Button, hops: list[str], results: Gtk.Box) -> None:
+    def _on_message_trace_clicked(
+        self, btn: Gtk.Button, hops: list[str], results: Gtk.Box, message: Message
+    ) -> None:
         import threading
 
         from meshcore_console.ui_gtk.widgets.trace_view import hops_to_target, trace_button_label
 
         hops = hops_to_target(btn, hops)  # [hop-target patch] only out to the picked repeater
-
-        from meshcore_console.ui_gtk.widgets.trace_view import build_trace_view
+        message_id = message.message_id
 
         btn.set_sensitive(False)
         btn.set_label("Tracing\u2026")
         clear_children(results)
+        self._message_traces.pop(message_id, None)
+        self._message_traces_running.add(message_id)
         peers = self._service.list_peers()
         target = find_peer_for_hop([p for p in peers if p.is_repeater], hops[-1])
         target_name = target.display_name if target is not None else hops[-1]
@@ -679,30 +698,43 @@ class MessagesView(Gtk.Box):
                 result = {"success": False, "reason": str(exc) or type(exc).__name__}
 
             def done() -> bool:
-                btn.set_sensitive(True)
-                btn.set_label(trace_button_label(btn))  # [hop-target patch]
-                if results.get_root() is None:
-                    return False  # details panel was closed or rebuilt
-                self_key = self._service.get_self_public_key() or ""
-                results.append(
-                    build_trace_view(
-                        result,
-                        self._service.list_peers(),
-                        target=target_name,
-                        self_label=f"{self._service.get_status().node_id} ({self_key[:2].upper() or 'me'})",
-                        spreading_factor=self._service.get_settings().spreading_factor,
-                        compact=True,
-                    )
-                )
-                if not result.get("success") and not result.get("busy"):  # [find-break patch]
-                    from meshcore_console.ui_gtk.widgets.trace_view import find_break_widget
-
-                    results.append(find_break_widget(self._service, hops, "channels"))
+                trace = {"hops": hops, "result": result, "target": target_name}
+                self._message_traces[message_id] = trace
+                self._message_traces_running.discard(message_id)
+                # Report to the panel showing this message now: it may have been
+                # closed and reopened (a new button and box) while the trace ran.
+                cur_btn, cur_results = self._trace_widgets.get(message_id, (btn, results))
+                cur_btn.set_sensitive(True)
+                cur_btn.set_label(trace_button_label(cur_btn))  # [hop-target patch]
+                if cur_results.get_root() is None:
+                    return False  # details panel is closed; shown when it reopens
+                clear_children(cur_results)
+                self._show_message_trace(cur_results, trace)
                 return False
 
             GLib.idle_add(done)
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _show_message_trace(self, results: Gtk.Box, trace: dict) -> None:
+        from meshcore_console.ui_gtk.widgets.trace_view import build_trace_view
+
+        result = trace["result"]
+        self_key = self._service.get_self_public_key() or ""
+        results.append(
+            build_trace_view(
+                result,
+                self._service.list_peers(),
+                target=trace["target"],
+                self_label=f"{self._service.get_status().node_id} ({self_key[:2].upper() or 'me'})",
+                spreading_factor=self._service.get_settings().spreading_factor,
+                compact=True,
+            )
+        )
+        if not result.get("success") and not result.get("busy"):  # [find-break patch]
+            from meshcore_console.ui_gtk.widgets.trace_view import find_break_widget
+
+            results.append(find_break_widget(self._service, trace["hops"], "channels"))
 
     def _on_mention_clicked(self, _label: Gtk.Label, uri: str) -> bool:
         """Handle clicks on @mention links — navigate to the peer."""

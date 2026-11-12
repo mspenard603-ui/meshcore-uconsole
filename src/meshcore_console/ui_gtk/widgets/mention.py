@@ -7,6 +7,8 @@ Brackets are stripped in the rendered output.
 
 from __future__ import annotations
 
+import re
+
 from gi.repository import GLib
 
 from meshcore_console.core.models import Peer
@@ -60,3 +62,15 @@ def parse_mentions(body: str, peers: list[Peer]) -> str:
             result.append(_escape(body[start:i]))
 
     return "".join(result)
+
+
+def mentions_name(body: str, name: str | None) -> bool:
+    """Whether *body* @-mentions *name*: ``@[name]`` (MeshCore replies) or a bare
+    ``@name`` not running on into more name characters. Case-insensitive.
+    [mention-glow patch]"""
+    name = (name or "").strip()
+    if not name or "@" not in body:
+        return False
+    if f"@[{name.lower()}]" in body.lower():
+        return True
+    return re.search(rf"@{re.escape(name)}(?![\w-])", body, re.IGNORECASE) is not None

@@ -121,6 +121,10 @@ class AdminView(Gtk.Box):
         self._autologin_attempts: dict[str, int] = {}
         self._autologin_suppressed: set[str] = set()  # manual logout this session
         self._relogin_needed: set[str] = set()
+        # [airtime] meshcore/airtime_policy.py: backoff and pause for failing polls; one flood
+        # login allowed right after a route was forgotten (the recovery round)
+        self._poll_fails: dict[str, int] = {}
+        self._route_recovery: set[str] = set()
         self._trace_retry_tally: dict[str, list[int]] = {}  # [persist patch]
         self._last_trace: dict[str, float] = {}
         self._restore_schedule()
@@ -860,9 +864,18 @@ class AdminView(Gtk.Box):
             return True
         if self._auto_trace_due(now):  # [trace-log patch]
             return True
+        from meshcore_console.meshcore import schedule_store
+        from meshcore_console.meshcore.airtime_policy import effective_poll_interval
+
         for name in self._service.list_logged_in_repeaters():
             interval = self._poll_interval_for(name)  # [poll-interval patch]
-            if interval and now - self._last_poll.get(name, 0.0) >= interval:
+            if not interval or self._repeater_key(name) in schedule_store.paused_polls():
+                continue
+            # [airtime] without a route a poll floods: at most hourly; failures back off
+            due = effective_poll_interval(
+                interval, self._service.has_direct_route(name), self._poll_fails.get(name, 0)
+            )
+            if now - self._last_poll.get(name, 0.0) >= due:
                 self._poll_repeater(name)
                 break
         return True
@@ -877,10 +890,13 @@ class AdminView(Gtk.Box):
         self._send_btn.set_sensitive(False)
         self._refresh_selected_status(peer_name)
 
+        direct = self._service.has_direct_route(peer_name)  # [airtime] before this poll
+
         def work() -> None:
             try:
                 result = self._service.request_repeater_stats(peer_name)
-                if result.get("success"):
+                # [airtime] the extra requests only over a route: without one they'd flood
+                if result.get("success") and self._service.has_direct_route(peer_name):
                     self._poll_power(peer_name)  # [power-source patch]
                     counter = getattr(self._service, "request_repeater_neighbour_counts", None)
                     if counter is not None:  # [neighbour-graph patch]
@@ -899,6 +915,7 @@ class AdminView(Gtk.Box):
                     self._update_login_ui(self._service.get_repeater_login_state(sel.display_name))
                 stamp = time.strftime("%H:%M")
                 if result.get("success"):
+                    self._poll_fails.pop(peer_name, None)  # [airtime]
                     self._poll_result[peer_name] = (
                         f"Last poll {stamp}: OK ({result.get('rtt_ms', 0)} ms)"
                     )
@@ -906,8 +923,14 @@ class AdminView(Gtk.Box):
                     self._poll_result[peer_name] = (
                         f"Last poll {stamp} failed: {result.get('reason', 'no response')}"
                     )
-                    if self._autologin_enabled(peer_name):  # [auto-login patch]
-                        self._relogin_needed.add(peer_name)  # session may have lapsed
+                    self._poll_failed(peer_name, direct)  # [airtime]
+                    # [auto-login patch] session may have lapsed; [airtime] a login only goes
+                    # over a route (or once, right after a route was forgotten)
+                    if self._autologin_enabled(peer_name) and (
+                        self._service.has_direct_route(peer_name)
+                        or peer_name in self._route_recovery
+                    ):
+                        self._relogin_needed.add(peer_name)
                 logger.info("repeater stats poll %s: %s", peer_name, self._poll_result[peer_name])
                 ok = bool(result.get("success"))
                 if ok:
@@ -927,6 +950,31 @@ class AdminView(Gtk.Box):
             GLib.idle_add(done)
 
         threading.Thread(target=work, daemon=True).start()
+
+    # --- [airtime] ---------------------------------------------------------------
+    def _poll_failed(self, peer_name: str, was_direct: bool) -> None:
+        """A failed auto-poll: back off, note a forgotten route, pause after too many."""
+        from meshcore_console.meshcore import schedule_store
+        from meshcore_console.meshcore.airtime_policy import MAX_POLL_FAILURES
+
+        n = self._poll_fails.get(peer_name, 0) + 1
+        self._poll_fails[peer_name] = n
+        if was_direct and not self._service.has_direct_route(peer_name):
+            self._route_recovery.add(peer_name)
+            self._activity(
+                peer_name,
+                "Route",
+                "Route forgotten after 2 unanswered requests: the next login and poll "
+                "flood once to learn a new one",
+            )
+        if n >= MAX_POLL_FAILURES:
+            schedule_store.pause_poll(self._repeater_key(peer_name))
+            self._activity(
+                peer_name,
+                "Poll",
+                f"Auto-poll paused after {n} failed polls (choose an interval to resume)",
+                ok=False,
+            )
 
     # --- [stats-button patch] -------------------------------------------------
     def _on_stats_quick(self, _btn: Gtk.Button | None) -> None:
@@ -985,65 +1033,52 @@ class AdminView(Gtk.Box):
         ("6 h", 21600),
     )
 
-    @staticmethod
-    def _poll_file():
-        from meshcore_console.meshcore.paths import config_dir
-
-        return config_dir() / "repeater_poll.json"
-
     def _poll_intervals(self) -> dict[str, int]:
-        # Saved interval (s) per repeater key; 0 = off. Loaded once.
-        cache = getattr(self, "_poll_interval_cache", None)
-        if cache is None:
-            import json
+        # Saved interval (s) per repeater key; 0 = off (meshcore/schedule_store.py, shared
+        # with Settings' "Disable all auto polling")
+        from meshcore_console.meshcore import schedule_store
 
-            try:
-                data = json.loads(self._poll_file().read_text())
-            except (OSError, ValueError):
-                data = {}
-            cache = {
-                str(k): int(v)
-                for k, v in (data.items() if isinstance(data, dict) else ())
-                if isinstance(v, (int, float)) and v >= 0
-            }
-            self._poll_interval_cache = cache
-        return cache
+        return schedule_store.poll_intervals()
 
     def _repeater_key(self, name: str) -> str:
         peer = next((p for p in self._service.list_peers() if p.display_name == name), None)
         return (peer.public_key or peer.peer_id) if peer is not None else name
 
     def _poll_interval_for(self, name: str) -> int:
-        from meshcore_console.meshcore.repeater_stats import POLL_INTERVAL_S
+        # [airtime] off unless chosen: a repeater is not polled just because you logged in
+        from meshcore_console.meshcore import schedule_store
 
-        return self._poll_intervals().get(self._repeater_key(name), POLL_INTERVAL_S)
+        return schedule_store.poll_interval(self._repeater_key(name))
 
     def _poll_interval_dropdown(self, peer: Peer) -> Gtk.DropDown:
         secs = [s for _l, s in self._POLL_CHOICES]
         dropdown = Gtk.DropDown.new_from_strings([lab for lab, _s in self._POLL_CHOICES])
+        from meshcore_console.meshcore import schedule_store
+
         current = self._poll_interval_for(peer.display_name)
-        dropdown.set_selected(secs.index(current) if current in secs else secs.index(900))
+        paused = self._repeater_key(peer.display_name) in schedule_store.paused_polls()
+        dropdown.set_selected(0 if paused else secs.index(current) if current in secs else 0)
         dropdown.set_valign(Gtk.Align.CENTER)
-        dropdown.set_tooltip_text("How often to request stats from this repeater")
+        dropdown.set_tooltip_text(
+            "Auto-poll paused: choose an interval to resume"
+            if paused
+            else "How often to request stats from this repeater. Without a route a poll "
+            "floods, so it is sent at most hourly; failures back off."
+        )
         dropdown.connect("notify::selected", self._on_poll_interval_changed, peer.display_name)
         return dropdown
 
     def _on_poll_interval_changed(self, dropdown: Gtk.DropDown, _pspec, name: str) -> None:
-        import json
+        from meshcore_console.meshcore import schedule_store
 
         seconds = self._POLL_CHOICES[dropdown.get_selected()][1]
-        self._poll_intervals()[self._repeater_key(name)] = seconds
+        schedule_store.set_poll_interval(self._repeater_key(name), seconds)  # resumes a pause
+        self._poll_fails.pop(name, None)
         logger.info("auto-poll for %s set to %ss", name, seconds)
         label = self._POLL_CHOICES[dropdown.get_selected()][0]
         self._activity(
             name, "Setting", "Auto-poll off" if not seconds else f"Auto-poll every {label}"
         )
-        try:
-            path = self._poll_file()
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(self._poll_intervals(), indent=1))
-        except OSError as e:
-            logger.warning("Could not save auto-poll interval: %s", e)
 
     # --- [auto-login patch] ---------------------------------------------------
     @staticmethod
@@ -1116,6 +1151,11 @@ class AdminView(Gtk.Box):
                 continue
             if now < self._autologin_next.get(name, 0.0):
                 continue
+            # [airtime] without a route the login floods: only right after a route was
+            # forgotten (once); otherwise wait for a route, or log in by hand
+            if not self._service.has_direct_route(name) and name not in self._route_recovery:
+                continue
+            self._route_recovery.discard(name)
             self._auto_login(name, relogin=name in logged_in)
             return True
         return False
@@ -1151,6 +1191,16 @@ class AdminView(Gtk.Box):
                     n = attempt + 1
                     self._autologin_attempts[name] = n
                     delay = min(20 * 3 ** (n - 1), 1800)  # 20 s, 1, 3, 9, 27, 30 min
+                    from meshcore_console.meshcore.airtime_policy import MAX_AUTOLOGIN_FAILURES
+
+                    if n >= MAX_AUTOLOGIN_FAILURES:  # [airtime] stop, don't retry forever
+                        self._autologin_suppressed.add(name)
+                        self._activity(
+                            name,
+                            what.capitalize(),
+                            f"Stopped after {n} failures; tick Auto-login again (or log in) to resume",
+                            ok=False,
+                        )
                     self._autologin_next[name] = time.time() + delay
                     when = f"{delay} s" if delay < 60 else f"{delay // 60} min"
                     msg = f"{what.capitalize()} to {name} failed ({result.get('reason', 'no response')}); retry in {when}"
@@ -1345,26 +1395,10 @@ class AdminView(Gtk.Box):
         ("6 h", 21600),
     )
 
-    @staticmethod
-    def _trace_file():
-        from meshcore_console.meshcore.paths import config_dir
-
-        return config_dir() / "repeater_trace.json"
-
     def _trace_intervals(self) -> dict[str, int]:
-        cache = getattr(self, "_trace_interval_cache", None)
-        if cache is None:
-            import json
+        from meshcore_console.meshcore import schedule_store  # shared with Settings
 
-            cache = {}
-            try:
-                data = json.loads(self._trace_file().read_text())
-                if isinstance(data, dict):
-                    cache = {str(k): int(v) for k, v in data.items()}
-            except (OSError, ValueError, TypeError):
-                pass
-            self._trace_interval_cache = cache
-        return cache
+        return schedule_store.trace_intervals()
 
     def _trace_interval_dropdown(self, peer: Peer) -> Gtk.DropDown:
         secs = [s for _l, s in self._TRACE_CHOICES]
@@ -1379,25 +1413,15 @@ class AdminView(Gtk.Box):
         return dropdown
 
     def _on_trace_interval_changed(self, dropdown: Gtk.DropDown, _pspec, name: str) -> None:
-        import json
+        from meshcore_console.meshcore import schedule_store
 
         seconds = self._TRACE_CHOICES[dropdown.get_selected()][1]
-        key = self._repeater_key(name)
-        if seconds:
-            self._trace_intervals()[key] = seconds
-        else:
-            self._trace_intervals().pop(key, None)
+        schedule_store.set_trace_interval(self._repeater_key(name), seconds)
         logger.info("auto-trace for %s set to %ss", name, seconds)
         label = self._TRACE_CHOICES[dropdown.get_selected()][0]
         self._activity(
             name, "Setting", "Auto-trace off" if not seconds else f"Auto-trace every {label}"
         )
-        try:
-            path = self._trace_file()
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(self._trace_intervals(), indent=1))
-        except OSError as e:
-            logger.warning("Could not save auto-trace interval: %s", e)
 
     def _auto_trace_due(self, now: float) -> bool:
         """Start at most one due auto-trace per tick. True if one was started."""

@@ -377,15 +377,22 @@ class PeersView(Gtk.Box):
         )  # [rooms patch]
 
     def _room_autologin_tick(self) -> bool:  # [room-chat patch]
-        """Once after start-up, then every 6 h: a room stops pushing to a client whose
-        ACKs failed 3 times (e.g. while Console was off) until it hears from it again."""
+        """Once after start-up, then every 15 min: log in to rooms we have no session
+        with (a failed login is retried), and refresh logins older than an hour. A
+        room stops pushing to a client whose ACKs failed 3 times until it hears a
+        login again, so a session can be dead on the room's side without us knowing."""
         import threading
 
         from meshcore_console.ui_gtk.widgets.room_view import auto_login_rooms
 
         if getattr(self._service.get_status(), "connected", False):
-            threading.Thread(target=auto_login_rooms, args=(self._service,), daemon=True).start()
-        GLib.timeout_add_seconds(6 * 3600, self._room_autologin_tick)
+            threading.Thread(
+                target=auto_login_rooms,
+                args=(self._service,),
+                kwargs={"max_age": 3600},
+                daemon=True,
+            ).start()
+        GLib.timeout_add_seconds(15 * 60, self._room_autologin_tick)
         return False
 
     # --- [admin-fold patch] -------------------------------------------------------

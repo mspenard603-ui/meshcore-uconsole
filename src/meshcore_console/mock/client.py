@@ -38,6 +38,8 @@ class MockMeshcoreClient(MeshcoreService):
         self._event_history: list[dict] = []
 
         self._repeater_sessions: dict[str, RepeaterLoginState] = {}
+
+        self._flood_only: set[str] = set()  # repeaters without a route (tests: polls flood)
         self._saved_passwords: dict[str, str] = {}
         self._channel_scopes: dict[str, str] = {}
         self._channel_secrets: dict[str, str] = {}
@@ -612,6 +614,9 @@ class MockMeshcoreClient(MeshcoreService):
 
     def list_logged_in_repeaters(self) -> list[str]:
         return list(self._repeater_sessions.keys())
+
+    def has_direct_route(self, peer_name: str) -> bool:
+        return peer_name not in self._flood_only
 
     def get_saved_repeater_password(self, peer_name: str) -> str | None:
         return self._saved_passwords.get(peer_name)

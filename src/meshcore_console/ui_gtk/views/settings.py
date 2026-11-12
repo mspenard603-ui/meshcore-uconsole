@@ -146,6 +146,7 @@ class SettingsView(Gtk.Box):
         right_col.append(self._build_hardware_panel())
         right_col.append(self._build_logging_panel())
         right_col.append(self._build_repeaters_panel())
+        right_col.append(self._build_schedule_panel())  # [airtime]
         columns.append(right_col)
 
         # Actions bar at bottom
@@ -521,6 +522,80 @@ class SettingsView(Gtk.Box):
         grid.attach(self._repeater_expiry_combo, 1, 0, 1, 1)
         panel.append(grid)
         return panel
+
+    # --- [airtime] Scheduled transmissions ------------------------------------------
+    def _build_schedule_panel(self) -> Gtk.Box:
+        panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        panel.add_css_class("panel-card")
+        panel.set_valign(Gtk.Align.START)
+        title = Gtk.Label(label="Scheduled transmissions")
+        title.add_css_class("panel-title")
+        title.set_halign(Gtk.Align.START)
+        panel.append(title)
+        note = Gtk.Label(
+            label="Auto-polls and auto-traces transmit on a timer. These stop all of them at once; "
+            "nothing is sent."
+        )
+        note.add_css_class("panel-muted")
+        note.set_wrap(True)
+        note.set_halign(Gtk.Align.START)
+        note.set_size_request(300, -1)  # GTK4 sizing: a wrapped label needs a width
+        panel.append(note)
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        polls = Gtk.Button.new_with_label("Disable all auto polling")
+        polls.set_tooltip_text(
+            "Pause every repeater's auto-poll (intervals are kept; choose one to resume)"
+        )
+        polls.connect("clicked", self._on_disable_polls)
+        traces = Gtk.Button.new_with_label("Disable all traces")
+        traces.set_tooltip_text("Turn every repeater's auto-trace off")
+        traces.connect("clicked", self._on_disable_traces)
+        row.append(polls)
+        row.append(traces)
+        panel.append(row)
+        self._schedule_note = Gtk.Label(label="")
+        self._schedule_note.add_css_class("panel-muted")
+        self._schedule_note.set_halign(Gtk.Align.START)
+        panel.append(self._schedule_note)
+        self._refresh_schedule_note()
+        return panel
+
+    def _refresh_schedule_note(self) -> None:
+        from meshcore_console.meshcore import schedule_store
+
+        polls = sum(
+            1
+            for k, v in schedule_store.poll_intervals().items()
+            if v and k not in schedule_store.paused_polls()
+        )
+        traces = sum(1 for v in schedule_store.trace_intervals().values() if v)
+        self._schedule_note.set_text(
+            f"Now: {polls} auto-poll{'s' if polls != 1 else ''}, "
+            f"{traces} auto-trace{'s' if traces != 1 else ''} active."
+        )
+
+    def _schedule_log(self, keys: list[str], text: str) -> None:
+        from meshcore_console.meshcore.activity_log import ACTIVITY
+
+        names = {(p.public_key or p.peer_id): p.display_name for p in self._service.list_peers()}
+        for key in keys:
+            ACTIVITY.add(key, names.get(key, key[:8]), "Setting", text, None)
+
+    def _on_disable_polls(self, _button: Gtk.Button) -> None:
+        from meshcore_console.meshcore import schedule_store
+
+        keys = schedule_store.pause_all_polls()
+        self._schedule_log(keys, "Auto-poll paused (Settings: disable all)")
+        self._status_label.set_text(f"Auto polling paused for {len(keys)} repeater(s)")
+        self._refresh_schedule_note()
+
+    def _on_disable_traces(self, _button: Gtk.Button) -> None:
+        from meshcore_console.meshcore import schedule_store
+
+        keys = schedule_store.clear_traces()
+        self._schedule_log(keys, "Auto-trace off (Settings: disable all)")
+        self._status_label.set_text(f"Auto-trace off for {len(keys)} repeater(s)")
+        self._refresh_schedule_note()
 
     def _on_logging_panel_map(self, _panel: Gtk.Widget) -> None:
         self._refresh_rf_noise()

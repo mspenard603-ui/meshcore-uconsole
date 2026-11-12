@@ -47,18 +47,14 @@ def _response_key(handler: object, contact: object, tag: int) -> tuple:
 
 
 def _forget_route(node: MeshNodeProtocol, peer_name: str) -> None:
-    """[route-pref patch] After a request over a multi-hop route times out,
-    forget the route so the next attempt floods; the reply's PATH then
-    teaches a working route (the MeshCore apps reset paths the same way)."""
+    """[route-pref patch] A request got no reply: on the second in a row, forget the route so
+    the next attempt floods; the reply's PATH then teaches a working route (the MeshCore apps
+    reset paths the same way). One slow or lost reply no longer costs a flood (airtime_policy)."""
+    from meshcore_console.meshcore.airtime_policy import forget_route_after_misses
+
     contacts = node.contacts
     contact = contacts.get_by_name(peer_name) if contacts is not None else None
-    if (
-        contact is not None
-        and getattr(contact, "out_path_len", -1) > 0
-        and (contact.out_path_len & 0x3F)
-    ):
-        contact.out_path = []
-        contact.out_path_len = -1
+    forget_route_after_misses(contact, peer_name)
 
 
 def _resolve_contact(node: MeshNodeProtocol, peer_name: str) -> object:
@@ -262,6 +258,9 @@ async def _send_login_unlocked(
         login_handler.remove_login_callback(pubkey, _on_login)
         login_handler.clear_login_password(dest_hash)
 
+    from meshcore_console.meshcore.airtime_policy import ROUTE_MISSES
+
+    ROUTE_MISSES.ok(peer_name)  # any login reply: the route works
     data = login_result["data"]
     return {
         "success": login_result["success"],
@@ -325,6 +324,9 @@ async def send_repeater_command(
         )
         await node.dispatcher.send_packet(pkt, wait_for_ack=False)
         await asyncio.wait_for(response_event.wait(), timeout=timeout)
+        from meshcore_console.meshcore.airtime_policy import ROUTE_MISSES
+
+        ROUTE_MISSES.ok(peer_name)
         return {
             "success": True,
             "repeater": peer_name,

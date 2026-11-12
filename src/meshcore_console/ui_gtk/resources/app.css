@@ -487,6 +487,12 @@ row:focus-visible {
   background: alpha(@mc_surface, 0.95);
 }
 
+/* [mention-glow patch] a message that @-mentions you glows, as favourite badges do */
+.message-incoming.message-mention {
+  border: 1px solid alpha(@mc_accent, 0.85);
+  box-shadow: 0 0 8px 2px alpha(@mc_accent, 0.55);
+}
+
 .message-body {
   font-size: 16px;
 }

@@ -45,6 +45,24 @@ def _propagate_routing_fields(packet_data: dict, handler_data: dict) -> None:
             handler_data[key] = list(val) if isinstance(val, list) else val
 
 
+ROOM_LIVE_WINDOW_S = 600
+
+
+def room_post_time(ts: int, now: datetime) -> datetime:
+    """When to file a post the room pushed at its own clock time *ts*.
+
+    A live post (room time within ROOM_LIVE_WINDOW_S of ours, or ahead of it)
+    is filed at *now*, on our clock like our own posts, so a room's reply never
+    sorts above the post it answers when the room's clock runs slow. Older
+    history pushed after a login keeps the room's time."""
+    if ts <= 1_600_000_000:
+        return now
+    room = datetime.fromtimestamp(ts, UTC)
+    if (now - room).total_seconds() < ROOM_LIVE_WINDOW_S:
+        return now
+    return room
+
+
 class MeshcoreClient(MeshcoreService):
     """openhop_core-backed adapter for the UI layer."""
 
@@ -85,6 +103,8 @@ class MeshcoreClient(MeshcoreService):
         activity_log.ACTIVITY.attach_store(self._repeater_samples)
         self._channel_secrets = ChannelDatabase(self._db)
         self._repeater_sessions: dict[str, RepeaterLoginState] = {}
+        self._room_sessions: dict[str, dict] = {}
+        self._room_relogin_lock = threading.Lock()
         # Load persisted state
         self._messages: list[Message] = self._message_store.get_all()
         self._channels: dict[str, Channel] = self._channel_store.get_all()
@@ -209,6 +229,11 @@ class MeshcoreClient(MeshcoreService):
         self._append_event(
             {"type": EventType.SESSION_CONNECTED, "data": {"node_name": self._settings.node_name}}
         )
+        # A fresh radio session has no room logins: get them back once the
+        # radio has settled.
+        relogin = threading.Timer(15.0, self.relogin_rooms)
+        relogin.daemon = True
+        relogin.start()
 
     def disconnect(self) -> None:
         runtime_connected = bool(self._session.status().get("connected"))
@@ -223,6 +248,7 @@ class MeshcoreClient(MeshcoreService):
                 self._shutdown_loop()
         self._connected = False
         self._repeater_sessions.clear()
+        self._room_sessions.clear()  # the rooms stop pushing to us; relogin on connect
         self._gps_provider.stop()
         self._append_event(
             {
@@ -961,7 +987,7 @@ class MeshcoreClient(MeshcoreService):
         msg_id = f"room_{(room.public_key or '')[:8]}_{ts}_{prefix}"
         if any(m.message_id == msg_id for m in self._messages if m.channel_id == chan.channel_id):
             return  # re-pushed after a missed ACK
-        created = datetime.fromtimestamp(ts, UTC) if ts > 1_600_000_000 else datetime.now(UTC)
+        created = room_post_time(ts, datetime.now(UTC))
         snr, rssi = data.get("snr"), data.get("rssi")
         message = Message(
             message_id=msg_id,
@@ -1003,7 +1029,40 @@ class MeshcoreClient(MeshcoreService):
         return chan.unread_count if chan is not None else 0
 
     def get_room_login_state(self, room_name: str) -> dict | None:
-        return getattr(self, "_room_sessions", {}).get(room_name)
+        return self._room_sessions.get(room_name)
+
+    def relogin_rooms(self, *, max_age: float | None = None) -> None:
+        """Log in to every room with a saved password that has no session, or
+        (with ``max_age``) a session older than that many seconds.
+
+        A room stops pushing to a client after 3 missed push ACKs and only
+        resumes once it hears a login, so a session we think is live can be
+        dead on the room's side. Blocking; one run at a time."""
+        import time as _time
+
+        if not self._room_relogin_lock.acquire(blocking=False):
+            return
+        try:
+            rooms = [p.display_name for p in list(self._peers.values()) if p.node_type == 3]
+            for name in rooms:
+                if not self._connected:
+                    return
+                password = self.get_saved_repeater_password(name)
+                if password is None:
+                    continue
+                state = self._room_sessions.get(name)
+                if state is not None and (
+                    max_age is None or _time.time() - state["time"] < max_age
+                ):
+                    continue
+                try:
+                    result = self.login_to_room(name, password, save_password=True)
+                except Exception as exc:  # noqa: BLE001
+                    result = {"success": False, "reason": str(exc)}
+                if not result.get("success"):
+                    logger.info("room auto-login to %s failed: %s", name, result.get("reason"))
+        finally:
+            self._room_relogin_lock.release()
 
     def login_to_room(self, room_name: str, password: str, *, save_password: bool = False) -> dict:
         """Log in to a room server; it then pushes posts newer than our saved sync point."""
@@ -1036,8 +1095,6 @@ class MeshcoreClient(MeshcoreService):
             perms = int(result.get("acl_permissions") or 0) & 3
             if result.get("is_admin"):
                 perms = 3
-            if not hasattr(self, "_room_sessions"):
-                self._room_sessions = {}
             self._room_sessions[room_name] = {
                 "time": _time.time(),
                 "perms": perms,
@@ -1054,13 +1111,16 @@ class MeshcoreClient(MeshcoreService):
         room = self._peers.get(room_name)
         if room is None or not self._connected:
             return {"success": False, "reason": "Radio not connected" if room else "Room not known"}
-        try:
-            res = self._run_async(
-                self._session.send_text(peer_name=room_name, message=text), timeout=30.0
-            )
-        except Exception as exc:  # noqa: BLE001
-            return {"success": False, "reason": str(exc) or type(exc).__name__}
-        ok = bool(res.get("success")) if isinstance(res, dict) else bool(res)
+        sent_at = datetime.now(UTC)  # before the ACK wait: the room may answer first
+        ok, reason = self._post_to_room(room_name, text)
+        if not ok:
+            # The room may have dropped us (missed push ACKs, reboot): with a
+            # saved password, log in again and retry once.
+            password = self.get_saved_repeater_password(room_name)
+            if password is not None:
+                self._room_sessions.pop(room_name, None)
+                if self.login_to_room(room_name, password, save_password=True).get("success"):
+                    ok, reason = self._post_to_room(room_name, text)
         if ok:
             chan = self._room_channel(room)
             msg = Message(
@@ -1068,15 +1128,22 @@ class MeshcoreClient(MeshcoreService):
                 sender_id=self._settings.node_name,
                 body=text,
                 channel_id=chan.channel_id,
-                created_at=datetime.now(UTC),
+                created_at=sent_at,
                 is_outgoing=True,
             )
             self._messages.append(msg)
             self._message_store.append(msg)
-        return {
-            "success": ok,
-            "reason": "" if ok else "No ACK from the room (not delivered, or no write access)",
-        }
+        return {"success": ok, "reason": reason}
+
+    def _post_to_room(self, room_name: str, text: str) -> tuple[bool, str]:
+        try:
+            res = self._run_async(
+                self._session.send_text(peer_name=room_name, message=text), timeout=30.0
+            )
+        except Exception as exc:  # noqa: BLE001
+            return False, str(exc) or type(exc).__name__
+        ok = bool(res.get("success")) if isinstance(res, dict) else bool(res)
+        return ok, "" if ok else "No ACK from the room (not delivered, or no write access)"
 
     def list_recent_events(self, limit: int = 50) -> list[MeshEventDict]:
         if limit <= 0:
@@ -1525,6 +1592,14 @@ class MeshcoreClient(MeshcoreService):
     def list_logged_in_repeaters(self) -> list[str]:
         return list(self._repeater_sessions.keys())
 
+
+    def has_direct_route(self, peer_name: str) -> bool:
+        """[airtime] Does the contact hold a route (zero- or multi-hop)? False: requests flood."""
+        from meshcore_console.meshcore.airtime_policy import has_route
+
+        if self._session is None:
+            return False
+        return has_route(self._session.contact_book.get_by_name(peer_name))
     def get_saved_repeater_password(self, peer_name: str) -> str | None:
         return self._repeater_password_store.get_password(peer_name)
 
